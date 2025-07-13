@@ -155,10 +155,20 @@ class SmalltalkInstructions(BaseModel):
         self,
         additional_instructions: str = _DEFAULT_ADDITIONAL_INSTRUCTIONS,
     ) -> str:
+        import pytz
+        # Get Paris timezone
+        paris_tz = pytz.timezone('Europe/Paris')
+
+        # Get current time in Paris
+        paris_time = datetime.datetime.now(paris_tz)
+
+        current_time = paris_time.strftime("%A, %B %d, %Y at %H:%M")
+        timezone = paris_time.strftime("%Z")  # or paris_time.tzname()
+
         additional_instructions = SMALLTALK_INSTRUCTIONS.format(
             additional_instructions=additional_instructions,
-            current_time=datetime.datetime.now().strftime("%A, %B %d, %Y at %H:%M"),
-            timezone=datetime.datetime.now().astimezone().tzname(),
+            current_time=current_time,
+            timezone=timezone,
             conversation_starter_suggestion=random.choice(
                 CONVERSATION_STARTER_SUGGESTIONS
             ),
@@ -324,12 +334,22 @@ class NewsInstructions(BaseModel):
         random.shuffle(articles)  # to avoid bias of the LLM
         articles_serialized = json.dumps([article.model_dump() for article in articles])
 
+        import pytz
+        # Get Paris timezone
+        paris_tz = pytz.timezone('Europe/Paris')
+
+        # Get current time in Paris
+        paris_time = datetime.datetime.now(paris_tz)
+
+        current_time = paris_time.strftime("%A, %B %d, %Y at %H:%M")
+        timezone = paris_time.strftime("%Z")  # or paris_time.tzname()
+
         return _SYSTEM_PROMPT_TEMPLATE.format(
             _SYSTEM_PROMPT_BASICS=_SYSTEM_PROMPT_BASICS,
             additional_instructions=NEWS_INSTRUCTIONS.format(
                 news=articles_serialized,
-                current_time=datetime.datetime.now().strftime("%A, %B %d, %Y at %H:%M"),
-                timezone=datetime.datetime.now().astimezone().tzname(),
+                current_time=current_time,
+                timezone=timezone,
             ),
             language_instructions=LANGUAGE_CODE_TO_INSTRUCTIONS[self.language],
             llm_name=get_readable_llm_name(),

@@ -619,9 +619,10 @@ class UnmuteHandler(AsyncStreamHandler):
         # Using function calling would be a more robust solution, but it would make it
         # harder to swap LLMs.
         if last_assistant_message.lower().endswith("bye!"):
-            await self.output_queue.put(
-                CloseStream("The assistant ended the conversation. Bye!")
-            )
+            pass
+            # await self.output_queue.put(
+            #     CloseStream("The assistant ended the conversation. Bye!")
+            # )
 
     async def detect_long_silence(self):
         """Handle situations where the user doesn't answer for a while."""

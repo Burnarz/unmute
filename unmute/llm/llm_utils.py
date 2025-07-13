@@ -150,6 +150,7 @@ class VLLMStream:
         self,
         client: AsyncOpenAI,
         temperature: float = 1.0,
+        extra_body: dict[str, Any] | None = None,
     ):
         """
         If `model` is None, it will look at the available models, and if there is only
@@ -158,6 +159,7 @@ class VLLMStream:
         self.client = client
         self.model = autoselect_model()
         self.temperature = temperature
+        self.extra_body = extra_body or {}
 
     async def chat_completion(
         self, messages: list[dict[str, str]]
@@ -167,6 +169,7 @@ class VLLMStream:
             messages=cast(Any, messages),  # Cast and hope for the best
             stream=True,
             temperature=self.temperature,
+            extra_body=self.extra_body,
         )
 
         async with stream:

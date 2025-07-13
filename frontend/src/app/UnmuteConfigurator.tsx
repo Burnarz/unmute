@@ -187,7 +187,7 @@ const UnmuteConfigurator = ({
   }
 
   const activeVoice = voices.find(
-    (voice) => voice.source.path_on_server === config.voice
+    (voice) => voice.name === config.voiceName
   );
   const defaultInstructions =
     activeVoice?.instructions || DEFAULT_UNMUTE_CONFIG.instructions;
@@ -266,7 +266,7 @@ const UnmuteConfigurator = ({
               {voices &&
                 voices.map((voice) => (
                   <SquareButton
-                    key={voice.source.path_on_server}
+                    key={voice.name}
                     onClick={() => {
                       setConfig({
                         voice: voice.source.path_on_server,
@@ -279,7 +279,7 @@ const UnmuteConfigurator = ({
                       });
                     }}
                     kind={
-                      voice.source.path_on_server === config.voice
+                      voice.name === config.voiceName
                         ? "primary"
                         : "secondary"
                     }

@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 
-const ALLOW_DEV_MODE = false;
+const ALLOW_DEV_MODE = true;
 
 const useKeyboardShortcuts = () => {
   // local storage persistence disabled in case random users activate it accidentally
   // useLocalStorage("useDevMode", false)
-  const [isDevMode, setIsDevMode] = useState(false);
+  const [isDevMode, setIsDevMode] = useState(true);
   // useLocalStorage("showSubtitles", false)
-  const [showSubtitles, setShowSubtitles] = useState(false);
+  const [showSubtitles, setShowSubtitles] = useState(true);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

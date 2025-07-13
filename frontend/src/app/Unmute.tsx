@@ -47,6 +47,32 @@ const Unmute = () => {
     unmuteConfig,
   });
 
+  useEffect(() => {
+    // Load Eruda script
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/eruda";
+    script.async = true;
+
+    script.onload = () => {
+      // Initialize Eruda after script loads
+      if (window.eruda) {
+        window.eruda.init();
+        // window.eruda.show();
+      }
+    };
+
+    document.head.appendChild(script);
+
+    // Cleanup function
+    return () => {
+      document.head.removeChild(script);
+      // Optionally destroy Eruda
+      if (window.eruda) {
+        window.eruda.destroy();
+      }
+    };
+  }, []);
+
   // Check if the backend server is healthy. If we setHealthStatus to null,
   // a "server is down" screen will be shown.
   useEffect(() => {

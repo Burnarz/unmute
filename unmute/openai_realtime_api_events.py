@@ -169,6 +169,21 @@ class UnmuteResponseAudioDeltaReady(
     number_of_samples: int
 
 
+class InputTextContent(BaseModel):
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class MessageItem(BaseModel):
+    type: Literal["message"] = "message"
+    role: Literal["user", "assistant"]
+    content: list[InputTextContent]
+
+
+class ConversationItemCreate(BaseEvent[Literal["conversation.item.create"]]):
+    item: MessageItem
+
+
 class UnmuteInterruptedByVAD(BaseEvent[Literal["unmute.interrupted_by_vad"]]):
     """The VAD interrupted the response generation."""
 
@@ -195,6 +210,7 @@ ServerEvent = Union[
 ClientEvent = Union[
     SessionUpdate,
     InputAudioBufferAppend,
+    ConversationItemCreate,
     # Used internally for recording, we're not expecting the user to send this
     UnmuteInputAudioBufferAppendAnonymized,
 ]

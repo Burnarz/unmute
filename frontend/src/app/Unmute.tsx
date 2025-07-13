@@ -15,7 +15,12 @@ import UnmuteConfigurator, {
 import CouldNotConnect, { HealthStatus } from "./CouldNotConnect";
 import UnmuteHeader from "./UnmuteHeader";
 import Subtitles from "./Subtitles";
-import { ChatMessage, compressChatHistory } from "./chatHistory";
+import {
+  ChatMessage,
+  compressChatHistory,
+  loadChatHistory,
+  saveChatHistory,
+} from "./chatHistory";
 import useWakeLock from "./useWakeLock";
 import ErrorMessages, { ErrorItem, makeErrorItem } from "./ErrorMessages";
 import { useRecordingCanvas } from "./useRecordingCanvas";
@@ -72,6 +77,16 @@ const Unmute = () => {
       }
     };
   }, []);
+
+  // Load chat history from local storage when the component mounts
+  useEffect(() => {
+    setRawChatHistory(loadChatHistory(unmuteConfig.voiceName));
+  }, [unmuteConfig.voiceName]);
+
+  // Save chat history to local storage when it changes
+  useEffect(() => {
+    saveChatHistory(rawChatHistory, unmuteConfig.voiceName);
+  }, [rawChatHistory, unmuteConfig.voiceName]);
 
   // Check if the backend server is healthy. If we setHealthStatus to null,
   // a "server is down" screen will be shown.
@@ -215,7 +230,7 @@ const Unmute = () => {
       // Transcription of the user speech
       setRawChatHistory((prev) => [
         ...prev,
-        { role: "user", content: data.delta },
+        { role: "user", content: " " + data.delta },
       ]);
     } else if (data.type === "response.text.delta") {
       // Text-to-speech output
@@ -254,7 +269,7 @@ const Unmute = () => {
     const recordingConsent =
       localStorage.getItem(RECORDING_CONSENT_STORAGE_KEY) === "true";
 
-    setRawChatHistory([]);
+    // setRawChatHistory([]);
     sendMessage(
       JSON.stringify({
         type: "session.update",
@@ -265,6 +280,26 @@ const Unmute = () => {
         },
       }),
     );
+    if (rawChatHistory.length > 0) {
+      const compressedHistory = compressChatHistory(rawChatHistory, "");
+      for (const message of compressedHistory) {
+        sendMessage(
+          JSON.stringify({
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: message.role,
+              content: [
+                {
+                  type: "input_text",
+                  text: message.content.trimStart(),
+                },
+              ],
+            },
+          })
+        );
+      }
+    }
   }, [unmuteConfig, readyState, sendMessage]);
 
   // Disconnect when the voice or instruction changes.

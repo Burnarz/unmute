@@ -291,6 +291,58 @@ async def post_voice_donation(
     return {}
 
 
+MEMORIES_DIR = "memories"
+os.makedirs(MEMORIES_DIR, exist_ok=True)
+
+
+@app.get("/v1/memories/{voice_name}")
+async def get_memories(voice_name: str):
+    voice_memories_dir = os.path.join(MEMORIES_DIR, voice_name)
+    if not os.path.exists(voice_memories_dir):
+        return []
+    return os.listdir(voice_memories_dir)
+
+
+@app.get("/v1/memories/{voice_name}/{filename}")
+async def get_memory(voice_name: str, filename: str):
+    file_path = os.path.join(MEMORIES_DIR, voice_name, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Memory not found")
+    with open(file_path, "r") as f:
+        return json.load(f)
+
+
+@app.post("/v1/memories/{voice_name}")
+async def post_memory(voice_name: str, file: UploadFile = File(...)):
+    voice_memories_dir = os.path.join(MEMORIES_DIR, voice_name)
+    os.makedirs(voice_memories_dir, exist_ok=True)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename not provided")
+
+    filename = os.path.basename(file.filename)
+    if not filename.endswith(".json"):
+        raise HTTPException(
+            status_code=400, detail="Invalid file type, only .json is accepted"
+        )
+
+    file_path = os.path.join(voice_memories_dir, filename)
+
+    try:
+        content = await file.read()
+        # verify it's valid json
+        json.loads(content)
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON file")
+
+    return {"filename": filename}
+
+
+
+
+
 @app.websocket("/v1/realtime")
 async def websocket_route(websocket: WebSocket):
     global _last_profile, _current_profile

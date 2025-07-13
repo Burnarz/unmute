@@ -20,6 +20,10 @@ import {
   compressChatHistory,
   loadChatHistory,
   saveChatHistory,
+  saveMemory,
+  getMemoryList,
+  loadMemory,
+  clearChatHistory,
 } from "./chatHistory";
 import useWakeLock from "./useWakeLock";
 import ErrorMessages, { ErrorItem, makeErrorItem } from "./ErrorMessages";
@@ -28,6 +32,7 @@ import { useGoogleAnalytics } from "./useGoogleAnalytics";
 import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
+import Modal from "./Modal";
 
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
@@ -45,6 +50,8 @@ const Unmute = () => {
   const [webSocketUrl, setWebSocketUrl] = useState<string | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [errors, setErrors] = useState<ErrorItem[]>([]);
+  const [savedMemories, setSavedMemories] = useState<string[]>([]);
+  const [closeModalSignal, setCloseModalSignal] = useState(0);
 
   useWakeLock(shouldConnect);
   const { analyticsOnDownloadRecording } = useGoogleAnalytics({
@@ -81,6 +88,7 @@ const Unmute = () => {
   // Load chat history from local storage when the component mounts
   useEffect(() => {
     setRawChatHistory(loadChatHistory(unmuteConfig.voiceName));
+    setSavedMemories(getMemoryList(unmuteConfig.voiceName));
   }, [unmuteConfig.voiceName]);
 
   // Save chat history to local storage when it changes
@@ -309,6 +317,36 @@ const Unmute = () => {
     shutdownAudio();
   }, [shutdownAudio, unmuteConfig.voice, unmuteConfig.instructions]);
 
+  const handleSaveMemory = () => {
+    saveMemory(unmuteConfig.voiceName);
+    setSavedMemories(getMemoryList(unmuteConfig.voiceName));
+    alert("Memory saved!");
+  };
+
+  const handleSelectMemory = (memory: string) => {
+    loadMemory(unmuteConfig.voiceName, memory);
+    setRawChatHistory(loadChatHistory(unmuteConfig.voiceName));
+    setCloseModalSignal((s) => s + 1);
+  };
+
+  const handleClearMemory = () => {
+    if (confirm("Are you sure you want to clear the memory?")) {
+      clearChatHistory(unmuteConfig.voiceName);
+      setRawChatHistory([]);
+    }
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0"); // Month is 0-indexed
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const seconds = String(date.getSeconds()).padStart(2, "0");
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+  };
+
   if (!healthStatus || !backendServerUrl) {
     return (
       <div className="flex flex-col gap-4 items-center">
@@ -372,6 +410,50 @@ const Unmute = () => {
             extraClasses="w-full max-w-96"
           >
             {shouldConnect ? "disconnect" : "connect"}
+          </SlantedButton>
+          <SlantedButton
+            onClick={handleSaveMemory}
+            kind="secondary"
+            extraClasses="w-full max-w-96"
+          >
+            {"save"}
+          </SlantedButton>
+          <Modal
+            className="w-full max-w-96"
+            trigger={
+              <SlantedButton kind="secondary" extraClasses="w-full">
+                {"load"}
+              </SlantedButton>
+            }
+            forceFullscreen={true}
+            closeSignal={closeModalSignal}
+          >
+            <div className="p-4">
+              <h2 className="text-lg font-bold mb-4">Load Memory</h2>
+              {savedMemories.length === 0 ? (
+                <p>No saved memories found.</p>
+              ) : (
+                <ul>
+                  {savedMemories.map((memory) => (
+                    <li key={memory} className="mb-2">
+                      <button
+                        onClick={() => handleSelectMemory(memory)}
+                        className="w-full text-left p-2 bg-gray-700 hover:bg-gray-600 rounded"
+                      >
+                        {formatTimestamp(memory)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Modal>
+          <SlantedButton
+            onClick={handleClearMemory}
+            kind="secondary"
+            extraClasses="w-full max-w-96"
+          >
+            {"clear"}
           </SlantedButton>
           {/* Maybe we don't need to explicitly show the status */}
           {/* {renderConnectionStatus(readyState, false)} */}

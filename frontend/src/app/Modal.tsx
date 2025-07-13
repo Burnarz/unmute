@@ -13,11 +13,13 @@ const Modal = ({
   children,
   forceFullscreen = false,
   closeSignal = 0,
+  className,
 }: {
   trigger: React.ReactNode; // The element that triggers the modal
   children: React.ReactNode; // The content of the modal
   forceFullscreen?: boolean; // Force the modal to be fullscreen
   closeSignal?: number; // Signal to close the modal (increment to trigger)
+  className?: string;
 }) => {
   // Use internal state for controlling open/closed state
   const [isOpen, setIsOpen] = useState(false);
@@ -204,7 +206,7 @@ const Modal = ({
   );
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} className={className}>
       {/* Render the trigger element */}
       <div
         ref={triggerRef}
@@ -212,7 +214,7 @@ const Modal = ({
         onMouseLeave={handleMouseLeave}
         onMouseMove={handleMouseMove}
         onClick={handleClick}
-        className="cursor-pointer"
+        className="cursor-pointer w-full flex justify-center"
       >
         {trigger}
       </div>

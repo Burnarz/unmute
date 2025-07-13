@@ -52,3 +52,38 @@ export const loadChatHistory = (voiceName: string): ChatMessage[] => {
     return [];
   }
 };
+
+export const saveMemory = (voiceName: string) => {
+  const timestamp = new Date().toISOString();
+  const memoryKey = `chatHistory_${voiceName}_memory_${timestamp}`;
+  const currentHistory = localStorage.getItem(getStorageKey(voiceName));
+  if (currentHistory) {
+    localStorage.setItem(memoryKey, currentHistory);
+  }
+};
+
+export const getMemoryList = (voiceName: string): string[] => {
+  const memoryTimestamps: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(`chatHistory_${voiceName}_memory_`)) {
+      memoryTimestamps.push(key.replace(`chatHistory_${voiceName}_memory_`, ""));
+    }
+  }
+  return memoryTimestamps.sort().reverse();
+};
+
+export const loadMemory = (
+  voiceName: string,
+  memoryTimestamp: string
+) => {
+  const memoryKey = `chatHistory_${voiceName}_memory_${memoryTimestamp}`;
+  const memoryHistory = localStorage.getItem(memoryKey);
+  if (memoryHistory) {
+    localStorage.setItem(getStorageKey(voiceName), memoryHistory);
+  }
+};
+
+export const clearChatHistory = (voiceName: string) => {
+  localStorage.removeItem(getStorageKey(voiceName));
+};

@@ -6,7 +6,12 @@ cd "$(dirname "$0")/"
 [ -f pyproject.toml ] || wget https://raw.githubusercontent.com/kyutai-labs/moshi/9837ca328d58deef5d7a4fe95a0fb49c902ec0ae/rust/moshi-server/pyproject.toml
 [ -f uv.lock ] || wget https://raw.githubusercontent.com/kyutai-labs/moshi/9837ca328d58deef5d7a4fe95a0fb49c902ec0ae/rust/moshi-server/uv.lock
 
-uv venv
+# Uncomment and run once to have the dependencies installed, but then don't sync again
+# uv venv
+# uv sync
+# uv pip install -U "git+https://git@github.com/kyutai-labs/moshi.git#egg=moshi&subdirectory=moshi"
+# uv pip uninstall torch torchvision torchaudio
+# uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 source .venv/bin/activate
 
 cd ..
@@ -27,4 +32,5 @@ cargo install --features cuda moshi-server@0.6.4
 # If you're getting `moshi-server: error: unrecognized arguments: worker`, it means you're
 # using the binary from the `moshi` Python package rather than from the Rust package.
 # Use `pip install moshi --upgrade` to update the Python package to >=0.2.8.
-uv run --locked --project ./dockerless moshi-server worker --config services/moshi-server/configs/tts.toml --port 8089
+uv run --no-sync --locked --project ./dockerless moshi-server worker --config services/moshi-server/configs/tts.toml --port 8089
+

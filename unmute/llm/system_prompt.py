@@ -92,6 +92,13 @@ def get_readable_llm_name():
     model = autoselect_model()
     return model.replace("-", " ").replace("_", " ")
 
+CONSTANT_INSTRUCTIONS = """
+{additional_instructions}
+
+# CONTEXT
+It's currently {current_time} in your timezone ({timezone}).
+"""
+
 
 class ConstantInstructions(BaseModel):
     type: Literal["constant"] = "constant"
@@ -99,9 +106,25 @@ class ConstantInstructions(BaseModel):
     language: LanguageCode | None = None
 
     def make_system_prompt(self) -> str:
+        import pytz
+        # Get Paris timezone
+        paris_tz = pytz.timezone('Europe/Paris')
+
+        # Get current time in Paris
+        paris_time = datetime.datetime.now(paris_tz)
+
+        current_time = paris_time.strftime("%A, %B %d, %Y at %H:%M")
+        timezone = paris_time.strftime("%Z")  # or paris_time.tzname()
+
+        additional_instructions = CONSTANT_INSTRUCTIONS.format(
+            additional_instructions=self.text,
+            current_time=current_time,
+            timezone=timezone
+        )
+        
         return _SYSTEM_PROMPT_TEMPLATE.format(
             _SYSTEM_PROMPT_BASICS=_SYSTEM_PROMPT_BASICS,
-            additional_instructions=self.text,
+            additional_instructions=additional_instructions,
             language_instructions=LANGUAGE_CODE_TO_INSTRUCTIONS[self.language],
             llm_name=get_readable_llm_name(),
         )

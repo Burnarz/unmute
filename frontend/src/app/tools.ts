@@ -72,29 +72,21 @@ async function getCoordinates({ city }: { city: string }) {
     return data.results[0];
 }
 
-async function getNews({ country, category, sources }: { country?: string, category?: string, sources?: string }) {
-    const apiKey = process.env.NEXT_PUBLIC_NEWSAPI_API_KEY;
-    if (!apiKey) {
-        return { error: "News API key is not configured on the client." };
-    }
-
+async function getNews(backendServerUrl: string, {country, category, sources}: {country?: string, category?: string, sources?: string}) {
     const params = new URLSearchParams();
     if (country) params.append("country", country);
     if (category) params.append("category", category);
     if (sources) params.append("sources", sources);
 
-    const response = await fetch(`https://newsapi.org/v2/top-headlines?${params.toString()}`, {
-        headers: {
-            "Authorization": apiKey,
-        }
-    });
+    const response = await fetch(`${backendServerUrl}/v1/proxy/news/top-headlines?${params.toString()}`);
 
     if (!response.ok) {
-        return { error: `News API request failed with status ${response.status}` };
+        const errorText = await response.text();
+        return { error: `News API request failed with status ${response.status}: ${errorText}` };
     }
     const data = await response.json();
-
-    if (data.status !== 'ok') {
+    
+    if (data.status && data.status !== 'ok') {
         return { error: `News API returned an error: ${data.message}` };
     }
 
@@ -109,52 +101,51 @@ async function getNews({ country, category, sources }: { country?: string, categ
     })) || [];
 }
 
-async function getNewsSources({ category }: { category?: string }) {
-    const apiKey = process.env.NEXT_PUBLIC_NEWSAPI_API_KEY;
-    if (!apiKey) {
-        return { error: "News API key is not configured on the client." };
-    }
-
+async function getNewsSources(backendServerUrl: string, {category}: {category?: string}) {
     const params = new URLSearchParams();
     if (category) params.append("category", category);
 
-    const response = await fetch(`https://newsapi.org/v2/top-headlines/sources?${params.toString()}`, {
-        headers: {
-            "Authorization": apiKey,
-        }
-    });
+    const response = await fetch(`${backendServerUrl}/v1/proxy/news/sources?${params.toString()}`);
 
     if (!response.ok) {
-        return { error: `News API request failed with status ${response.status}` };
+        const errorText = await response.text();
+        return { error: `News API request failed with status ${response.status}: ${errorText}` };
     }
     const data = await response.json();
 
-    if (data.status !== 'ok') {
+    if (data.status && data.status !== 'ok') {
         return { error: `News API returned an error: ${data.message}` };
     }
 
     return data.sources;
 }
 
-const toolFunctions: { [key: string]: (args: any) => Promise<any> } = {
-    get_weather: getWeather,
-    get_coordinates: getCoordinates,
-    get_news: getNews,
-    get_news_sources: getNewsSources,
-};
 
-export async function handleToolCall(call: { name: string, arguments: string }) {
+export async function handleToolCall(call: { name: string, arguments: string }, backendServerUrl: string) {
     console.log(`Handling function call: ${call.name}`);
-
-    const toolFunction = toolFunctions[call.name];
-    if (!toolFunction) {
-        return { error: `Unknown function call: ${call.name}` };
-    }
 
     try {
         const args = JSON.parse(call.arguments || "{}");
         console.log(`Function call ${call.name} args:`, args);
-        const result = await toolFunction(args);
+        
+        let result;
+        switch (call.name) {
+            case 'get_weather':
+                result = await getWeather(args);
+                break;
+            case 'get_coordinates':
+                result = await getCoordinates(args);
+                break;
+            case 'get_news':
+                result = await getNews(backendServerUrl, args);
+                break;
+            case 'get_news_sources':
+                result = await getNewsSources(backendServerUrl, args);
+                break;
+            default:
+                result = { error: `Unknown function call: ${call.name}` };
+        }
+
         console.log(`Function call ${call.name} result:`, result);
         return result;
     } catch (error) {

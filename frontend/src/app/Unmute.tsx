@@ -258,7 +258,7 @@ const Unmute = () => {
           continue;
         }
 
-        handleToolCall(call).then(toolResult => {
+        handleToolCall(call, backendServerUrl).then(toolResult => {
           const result = {
             type: "conversation.item.create",
             item: {

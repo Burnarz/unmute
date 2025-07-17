@@ -6,6 +6,10 @@ from typing import Any, AsyncIterator, Protocol, cast
 
 from mistralai import Mistral
 from openai import AsyncOpenAI, OpenAI
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+    Function,
+)
 
 from unmute.kyutai_constants import LLM_SERVER
 
@@ -16,8 +20,8 @@ USER_SILENCE_MARKER = "..."
 
 
 def preprocess_messages_for_llm(
-    chat_history: list[dict[str, str]],
-) -> list[dict[str, str]]:
+    chat_history: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     output = []
 
     for message in chat_history:
@@ -26,14 +30,24 @@ def preprocess_messages_for_llm(
         # Sometimes, an interruption happens before the LLM can say anything at all.
         # In that case, we're left with a message with only INTERRUPTION_CHAR.
         # Simplify by removing.
-        if message["content"].replace(INTERRUPTION_CHAR, "") == "":
+        if (
+            isinstance(message.get("content"), str)
+            and message["content"].replace(INTERRUPTION_CHAR, "") == ""
+        ):
             continue
 
         # If the llm was interrupted we don't want to insert the INTERRUPTION_CHAR
         # into the context, otherwise the LLM might want to repeat it.
         message["content"] = message["content"].strip().removesuffix(INTERRUPTION_CHAR)
 
-        if output and message["role"] == output[-1]["role"]:
+        if (
+            output
+            and message["role"] == output[-1]["role"]
+            and isinstance(message.get("content"), str)
+            and isinstance(output[-1].get("content"), str)
+            and message.get("tool_calls") is None
+            and output[-1].get("tool_calls") is None
+        ):
             output[-1]["content"] += " " + message["content"]
         else:
             output.append(message)
@@ -51,6 +65,7 @@ def preprocess_messages_for_llm(
     for message in chat_history:
         if (
             message["role"] == "user"
+            and isinstance(message.get("content"), str)
             and message["content"].startswith(USER_SILENCE_MARKER)
             and message["content"] != USER_SILENCE_MARKER
         ):
@@ -62,7 +77,6 @@ def preprocess_messages_for_llm(
             message["content"] = message["content"][len(USER_SILENCE_MARKER) :]
 
     return output
-
 
 async def rechunk_to_words(iterator: AsyncIterator[str]) -> AsyncIterator[str]:
     """Rechunk the stream of text to whole words.
@@ -93,10 +107,71 @@ async def rechunk_to_words(iterator: AsyncIterator[str]) -> AsyncIterator[str]:
         yield prefix + buffer
 
 
+async def rechunk_to_words_and_functions(
+    iterator: AsyncIterator[Any],
+) -> AsyncIterator[dict[str, Any]]:
+    """Rechunk the stream of LLM deltas to words or tool calls.
+
+    See [rechunk_to_words] for more details on how words are handled.
+
+    Words are yielded as {"word": "word"}.
+    Tool calls are yielded as {"function": {"id": "...", "name": "...", "arguments": "..."}}.
+    """
+    buffer = ""
+    space_re = re.compile(r"\s+")
+    prefix = ""
+    tools: dict[int, ChatCompletionMessageToolCall] = {}
+
+    async for delta in iterator:
+        if not delta:
+            continue
+        if delta.tool_calls:
+            for tool_call_chunk in delta.tool_calls:
+                index = tool_call_chunk.index
+                if index not in tools:
+                    tools[index] = ChatCompletionMessageToolCall(
+                        id=tool_call_chunk.id or "",
+                        function=Function(
+                            name=tool_call_chunk.function.name or "",
+                            arguments=tool_call_chunk.function.arguments or "",
+                        ),
+                        type="function",
+                    )
+                else:
+                    tool = tools[index]
+                    if tool_call_chunk.id:
+                        tool.id = tool_call_chunk.id
+                    if tool_call_chunk.function:
+                        if tool_call_chunk.function.name:
+                            tool.function.name = tool_call_chunk.function.name
+                        if tool_call_chunk.function.arguments:
+                            tool.function.arguments += (
+                                tool_call_chunk.function.arguments
+                            )
+                yield {"function": tools[index]}
+        if delta.content:
+            buffer = buffer + delta.content
+            while True:
+                match = space_re.search(buffer)
+                if match is None:
+                    break
+                chunk = buffer[: match.start()]
+                buffer = buffer[match.end() :]
+                if chunk != "":
+                    yield {"word": prefix + chunk}
+                prefix = " "
+
+    if buffer != "":
+        yield {"word": prefix + buffer}
+
+
 class LLMStream(Protocol):
     async def chat_completion(
-        self, messages: list[dict[str, str]]
-    ) -> AsyncIterator[str]:
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+    ) -> AsyncIterator[Any]:
         """Get a chat completion from the LLM."""
         ...
 
@@ -107,8 +182,13 @@ class MistralStream:
         self.mistral = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
 
     async def chat_completion(
-        self, messages: list[dict[str, str]]
-    ) -> AsyncIterator[str]:
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+    ) -> AsyncIterator[Any]:
+        if tools:
+            raise NotImplementedError("MistralStream does not support tool calling yet.")
         event_stream = await self.mistral.chat.stream_async(
             model="mistral-large-latest",
             messages=cast(Any, messages),  # It's too annoying to type this properly
@@ -116,9 +196,7 @@ class MistralStream:
         )
 
         async for event in event_stream:
-            delta = event.data.choices[0].delta.content
-            assert isinstance(delta, str)  # make Pyright happy
-            yield delta
+            yield event.data.choices[0].delta
 
 
 def get_openai_client(
@@ -162,25 +240,25 @@ class VLLMStream:
         self.extra_body = extra_body or {}
 
     async def chat_completion(
-        self, messages: list[dict[str, str]]
-    ) -> AsyncIterator[str]:
-        stream = await self.client.chat.completions.create(
-            model=self.model,
-            messages=cast(Any, messages),  # Cast and hope for the best
-            stream=True,
-            temperature=self.temperature,
-            extra_body=self.extra_body,
-        )
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+    ) -> AsyncIterator[Any]:
+        create_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": cast(Any, messages),  # Cast and hope for the best
+            "stream": True,
+            "temperature": self.temperature,
+            "extra_body": self.extra_body,
+        }
+        if tools:
+            create_kwargs["tools"] = tools
+        if tool_choice:
+            create_kwargs["tool_choice"] = tool_choice
+
+        stream = await self.client.chat.completions.create(**create_kwargs)
 
         async with stream:
             async for chunk in stream:
-                chunk_content = chunk.choices[0].delta.content
-
-                if not chunk_content:
-                    # This happens on the first message, see:
-                    # https://platform.openai.com/docs/guides/streaming-responses#read-the-responses
-                    # Also ignore `null` chunks, which is what llama.cpp does:
-                    # https://github.com/ggml-org/llama.cpp/blob/6491d6e4f1caf0ad2221865b4249ae6938a6308c/tools/server/tests/unit/test_chat_completion.py#L338
-                    continue
-
-                yield chunk_content
+                yield chunk.choices[0].delta

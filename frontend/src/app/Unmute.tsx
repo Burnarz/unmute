@@ -33,6 +33,7 @@ import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 import Modal from "./Modal";
+import { tools, handleToolCall } from "./tools";
 
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
@@ -249,6 +250,29 @@ const Unmute = () => {
         // but whatever.
         { role: "assistant", content: " " + data.delta },
       ]);
+    } else if (data.type === "response.function_call_arguments.delta") {
+      // We can notify the model that the function is going to take a while here
+    } else if (data.type === "response.done") {
+      for (const call of data.response.output) {
+        if (call.type !== 'function_call') {
+          continue;
+        }
+
+        handleToolCall(call).then(toolResult => {
+          const result = {
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: call.call_id,
+              output: JSON.stringify(toolResult),
+            }
+          }
+          sendMessage(JSON.stringify(result));
+          sendMessage(JSON.stringify({
+            type: "response.create",
+          }));
+        });
+      }
     } else {
       const ignoredTypes = [
         "session.updated",
@@ -285,6 +309,8 @@ const Unmute = () => {
           instructions: unmuteConfig.instructions,
           voice: unmuteConfig.voice,
           allow_recording: recordingConsent,
+          tools: tools,
+          tool_choice: "auto",
         },
       }),
     );

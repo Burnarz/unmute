@@ -17,6 +17,8 @@ class Chatbot:
             {"role": "system", "content": ConstantInstructions().make_system_prompt()}
         ]
         self._instructions: Instructions | None = None
+        self.tools: list[dict[str, Any]] | None = None
+        self.tool_choice: str | None = None
 
     def conversation_state(self) -> ConversationState:
         if not self.chat_history:
@@ -33,6 +35,8 @@ class Chatbot:
                 return "waiting_for_user"
         elif last_message["role"] == "system":
             return "waiting_for_user"
+        elif last_message["role"] == "tool":
+            return "bot_speaking"
         else:
             raise RuntimeError(f"Unknown role: {last_message['role']}")
 
@@ -113,7 +117,7 @@ class Chatbot:
         valid_messages = [
             message
             for message in self.chat_history
-            if message["role"] == role and message["content"].strip() != ""
+            if message["role"] == role and message.get("content") and message["content"].strip() != ""
         ]
         if valid_messages:
             return valid_messages[-1]["content"]

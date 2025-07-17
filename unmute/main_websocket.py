@@ -534,12 +534,22 @@ async def receive_loop(
         elif isinstance(message, ora.SessionUpdate):
             await handler.update_session(message.session)
             await emit_queue.put(ora.SessionUpdated(session=message.session))
-
+        elif isinstance(message, ora.ResponseCreate):
+            await handler._generate_response()
         elif isinstance(message, ora.ConversationItemCreate):
-            new_message = {
-                "role": message.item.role,
-                "content": message.item.content[0].text,
-            }
+            if isinstance(message.item, ora.MessageItem):
+                new_message = {
+                    "role": message.item.role,
+                    "content": message.item.content[0].text,
+                }
+            elif isinstance(message.item, ora.FunctionCallOutputItem):
+                new_message = {
+                    "role": "tool",
+                    "tool_call_id": message.item.call_id,
+                    "content": message.item.output,
+                }
+            else:
+                raise ValueError(f"Unknown item type: {message.item.type}")
             handler.chatbot.chat_history.append(new_message)
 
         elif isinstance(message, ora.UnmuteAdditionalOutputs):

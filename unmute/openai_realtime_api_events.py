@@ -63,11 +63,32 @@ class Error(BaseEvent[Literal["error"]]):
     error: ErrorDetails
 
 
+class FunctionParameters(BaseModel):
+    type: Literal["object"] = "object"
+    properties: dict[str, Any]
+    required: list[str] = Field(default_factory=list)
+
+
+class FunctionDefinition(BaseModel):
+    name: str
+    description: str
+    parameters: FunctionParameters
+
+
+class FunctionTool(BaseModel):
+    type: Literal["function"] = "function"
+    function: FunctionDefinition
+
+
+
+
 class SessionConfig(BaseModel):
     # The "Instructions" object is an Unmute extension
     instructions: Instructions | None = None
     voice: str | None = None
     allow_recording: bool
+    tools: list[FunctionTool] | None = None
+    tool_choice: str | None = None
 
 
 class SessionUpdate(BaseEvent[Literal["session.update"]]):
@@ -76,6 +97,10 @@ class SessionUpdate(BaseEvent[Literal["session.update"]]):
 
 class SessionUpdated(BaseEvent[Literal["session.updated"]]):
     session: SessionConfig
+
+
+class ResponseCreate(BaseEvent[Literal["response.create"]]):
+    tools: list[FunctionTool] | None = None
 
 
 class InputAudioBufferAppend(BaseEvent[Literal["input_audio_buffer.append"]]):
@@ -128,6 +153,12 @@ class ResponseTextDelta(BaseEvent[Literal["response.text.delta"]]):
     delta: str
 
 
+class ResponseFunctionCallArgumentsDelta(
+    BaseEvent[Literal["response.function_call_arguments.delta"]]
+):
+    delta: str
+
+
 class ResponseTextDone(BaseEvent[Literal["response.text.done"]]):
     text: str
 
@@ -138,6 +169,30 @@ class ResponseAudioDelta(BaseEvent[Literal["response.audio.delta"]]):
 
 class ResponseAudioDone(BaseEvent[Literal["response.audio.done"]]):
     pass
+
+
+class FunctionCallItem(BaseModel):
+    object: Literal["realtime.item"] = "realtime.item"
+    id: str
+    type: Literal["function_call"] = "function_call"
+    status: str
+    name: str
+    call_id: str
+    arguments: str  # JSON string
+
+
+class ResponseForDone(BaseModel):
+    object: Literal["realtime.response"] = "realtime.response"
+    id: str
+    status: str
+    status_details: Any | None = None
+    output: list[FunctionCallItem]
+    usage: dict[str, Any]
+    metadata: Any | None = None
+
+
+class ResponseDone(BaseEvent[Literal["response.done"]]):
+    response: ResponseForDone
 
 
 class TranscriptLogprob(BaseModel):
@@ -174,14 +229,23 @@ class InputTextContent(BaseModel):
     text: str
 
 
+class FunctionCallOutputItem(BaseModel):
+    type: Literal["function_call_output"] = "function_call_output"
+    call_id: str
+    output: str  # JSON string
+
+
 class MessageItem(BaseModel):
     type: Literal["message"] = "message"
     role: Literal["user", "assistant"]
     content: list[InputTextContent]
 
 
+ConversationItem = Union[MessageItem, FunctionCallOutputItem]
+
+
 class ConversationItemCreate(BaseEvent[Literal["conversation.item.create"]]):
-    item: MessageItem
+    item: ConversationItem = Field(..., discriminator="type")
 
 
 class UnmuteInterruptedByVAD(BaseEvent[Literal["unmute.interrupted_by_vad"]]):
@@ -193,9 +257,11 @@ ServerEvent = Union[
     Error,
     SessionUpdated,
     ResponseTextDelta,
+    ResponseFunctionCallArgumentsDelta,
     ResponseTextDone,
     ResponseAudioDelta,
     ResponseAudioDone,
+    ResponseDone,
     ResponseCreated,
     ConversationItemInputAudioTranscriptionDelta,
     InputAudioBufferSpeechStarted,
@@ -209,6 +275,7 @@ ServerEvent = Union[
 # Client events (from client to OpenAI)
 ClientEvent = Union[
     SessionUpdate,
+    ResponseCreate,
     InputAudioBufferAppend,
     ConversationItemCreate,
     # Used internally for recording, we're not expecting the user to send this

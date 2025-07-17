@@ -32,8 +32,9 @@ from unmute.llm.llm_utils import (
     USER_SILENCE_MARKER,
     VLLMStream,
     get_openai_client,
-    rechunk_to_words,
+    rechunk_to_words_and_functions,
 )
+from unmute.openai_realtime_api_events import random_id
 from unmute.quest_manager import Quest, QuestManager
 from unmute.recorder import Recorder
 from unmute.service_discovery import find_instance
@@ -56,12 +57,30 @@ DEBUG_PLOT_HISTORY_SEC = 10.0
 
 USER_SILENCE_TIMEOUT = 7.0
 FIRST_MESSAGE_TEMPERATURE = 1.0
+
 FURTHER_MESSAGES_TEMPERATURE = 1.0
 LLM_EXTRA_BODY = {
     'top_p': 0.95,
-    'top_k': 40,
+    'top_k': 60,
     'min_p': 0.0,
 }
+
+# FURTHER_MESSAGES_TEMPERATURE = 0.6
+# LLM_EXTRA_BODY = {
+#     'top_p': 0.95,
+#     'top_k': 20,
+#     'min_p': 0.0,
+#     "chat_template_kwargs": {"enable_thinking": True},
+# }
+
+# FURTHER_MESSAGES_TEMPERATURE = 0.7
+# LLM_EXTRA_BODY = {
+#     'top_p': 0.8,
+#     'top_k': 20,
+#     'min_p': 0.0,
+#     "chat_template_kwargs": {"enable_thinking": False},
+# }
+
 # For this much time, the VAD does not interrupt the bot. This is needed because at
 # least on Mac, the echo cancellation takes a while to kick in, at the start, so the ASR
 # sometimes hears a bit of the TTS audio and interrupts the bot. Only happens on the
@@ -77,7 +96,7 @@ HandlerOutput = (
 
 
 class GradioUpdate(BaseModel):
-    chat_history: list[dict[str, str]]
+    chat_history: list[dict[str, Any]]
     debug_dict: dict[str, Any]
     debug_plot_data: list[dict]
 
@@ -213,56 +232,133 @@ class UnmuteHandler(AsyncStreamHandler):
         )
 
         messages = self.chatbot.preprocessed_messages()
+        tools = self.chatbot.tools
+        tool_choice = self.chatbot.tool_choice
 
         self.tts_output_stopwatch = Stopwatch(autostart=False)
         tts = None
 
         response_words = []
+        tool_calls = {}  # Storing tool calls by call_id
+        sent_arguments = {}  # Storing sent arguments length by call_id
         error_from_tts = False
         time_to_first_token = None
         num_words_sent = sum(
-            len(message.get("content", "").split()) for message in messages
+            len(message.get("content", "").split())
+            for message in messages
+            if message.get("content")
         )
         mt.VLLM_SENT_WORDS.inc(num_words_sent)
         mt.VLLM_REQUEST_LENGTH.observe(num_words_sent)
         mt.VLLM_ACTIVE_SESSIONS.inc()
 
         try:
-            async for delta in rechunk_to_words(llm.chat_completion(messages)):
+            llm_iterator = llm.chat_completion(
+                messages, tools=tools, tool_choice=tool_choice
+            )
+            async for chunk in rechunk_to_words_and_functions(llm_iterator):
+                logger.info("LLM chunk: %s", chunk)
+                if "word" in chunk:
+                    delta = chunk["word"]
+                    await self.output_queue.put(
+                        ora.UnmuteResponseTextDeltaReady(delta=delta)
+                    )
+
+                    mt.VLLM_RECV_WORDS.inc()
+                    response_words.append(delta)
+
+                    if time_to_first_token is None:
+                        time_to_first_token = llm_stopwatch.time()
+                        self.debug_dict["timing"][
+                            "to_first_token"
+                        ] = time_to_first_token
+                        mt.VLLM_TTFT.observe(time_to_first_token)
+                        logger.info("Sending first word to TTS: %s", delta)
+
+                    self.tts_output_stopwatch.start_if_not_started()
+                    try:
+                        tts = await quest.get()
+                    except Exception:
+                        error_from_tts = True
+                        raise
+
+                    if len(self.chatbot.chat_history) > generating_message_i:
+                        break  # We've been interrupted
+
+                    assert isinstance(delta, str)  # make Pyright happy
+                    await tts.send(delta)
+
+                elif "function" in chunk:
+                    tool_call = chunk["function"]
+                    call_id = tool_call.id
+
+                    if call_id not in tool_calls:
+                        tool_calls[call_id] = tool_call
+                        sent_arguments[call_id] = 0
+
+                    # Send argument delta
+                    all_args = tool_call.function.arguments
+                    sent_len = sent_arguments[call_id]
+                    if len(all_args) > sent_len:
+                        arg_delta = all_args[sent_len:]
+                        await self.output_queue.put(
+                            ora.ResponseFunctionCallArgumentsDelta(delta=arg_delta)
+                        )
+                        sent_arguments[call_id] = len(all_args)
+
+                    # Update tool_call in our store
+                    tool_calls[call_id] = tool_call
+
+            if tool_calls:
+                assistant_message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_calls.values()
+                    ],
+                }
+                self.chatbot.chat_history.append(assistant_message)
+
+                function_call_items = []
+                for tc in tool_calls.values():
+                    function_call_items.append(
+                        ora.FunctionCallItem(
+                            object="realtime.item",
+                            id=random_id("item"),
+                            type="function_call",
+                            status="completed",
+                            name=tc.function.name,
+                            call_id=tc.id,
+                            arguments=tc.function.arguments,
+                        )
+                    )
+
+                response_for_done = ora.ResponseForDone(
+                    object="realtime.response",
+                    id=random_id("resp"),
+                    status="completed",
+                    output=function_call_items,
+                    usage={},  # TODO: get usage info
+                    metadata=None,
+                )
+                await self.output_queue.put(ora.ResponseDone(response=response_for_done))
+            else:
                 await self.output_queue.put(
-                    ora.UnmuteResponseTextDeltaReady(delta=delta)
+                    # The words include the whitespace, so no need to add it here
+                    ora.ResponseTextDone(text="".join(response_words))
                 )
 
-                mt.VLLM_RECV_WORDS.inc()
-                response_words.append(delta)
-
-                if time_to_first_token is None:
-                    time_to_first_token = llm_stopwatch.time()
-                    self.debug_dict["timing"]["to_first_token"] = time_to_first_token
-                    mt.VLLM_TTFT.observe(time_to_first_token)
-                    logger.info("Sending first word to TTS: %s", delta)
-
-                self.tts_output_stopwatch.start_if_not_started()
-                try:
-                    tts = await quest.get()
-                except Exception:
-                    error_from_tts = True
-                    raise
-
-                if len(self.chatbot.chat_history) > generating_message_i:
-                    break  # We've been interrupted
-
-                assert isinstance(delta, str)  # make Pyright happy
-                await tts.send(delta)
-
-            await self.output_queue.put(
-                # The words include the whitespace, so no need to add it here
-                ora.ResponseTextDone(text="".join(response_words))
-            )
-
-            if tts is not None:
-                logger.info("Sending TTS EOS.")
-                await tts.send(TTSClientEosMessage())
+                if tts is not None:
+                    logger.info("Sending TTS EOS.")
+                    await tts.send(TTSClientEosMessage())
         except asyncio.CancelledError:
             mt.VLLM_INTERRUPTS.inc()
             raise
@@ -613,22 +709,15 @@ class UnmuteHandler(AsyncStreamHandler):
         await self.quest_manager.remove("llm")
 
     async def check_for_bot_goodbye(self):
-        last_assistant_message = next(
-            (
-                msg
-                for msg in reversed(self.chatbot.chat_history)
-                if msg["role"] == "assistant"
-            ),
-            {"content": ""},
-        )["content"]
-
-        # Using function calling would be a more robust solution, but it would make it
-        # harder to swap LLMs.
-        if last_assistant_message.lower().endswith("bye!"):
-            pass
-            # await self.output_queue.put(
-            #     CloseStream("The assistant ended the conversation. Bye!")
-            # )
+        last_assistant_message = self.chatbot.last_message("assistant")
+        if last_assistant_message:
+            # Using function calling would be a more robust solution, but it would make it
+            # harder to swap LLMs.
+            if "bye" in last_assistant_message.lower():
+                pass
+                # await self.output_queue.put(
+                #     CloseStream("The assistant ended the conversation. Bye!")
+                # )
 
     async def detect_long_silence(self):
         """Handle situations where the user doesn't answer for a while."""
@@ -650,6 +739,11 @@ class UnmuteHandler(AsyncStreamHandler):
 
         if session.voice:
             self.tts_voice = session.voice
+
+        if session.tools:
+            self.chatbot.tools = session.tools
+        if session.tool_choice:
+            self.chatbot.tool_choice = session.tool_choice
 
         if not session.allow_recording and self.recorder:
             await self.recorder.add_event("client", ora.SessionUpdate(session=session))

@@ -42,7 +42,7 @@ const Unmute = () => {
     DEFAULT_UNMUTE_CONFIG,
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
-  const chatHistory = compressChatHistory(rawChatHistory);
+  const chatHistory = compressChatHistory(rawChatHistory, "");
 
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
 
@@ -59,6 +59,14 @@ const Unmute = () => {
     shouldConnect,
     unmuteConfig,
   });
+
+  const { sendMessage, lastMessage, readyState } = useWebSocket(
+    webSocketUrl || null,
+    {
+      protocols: ["realtime"],
+    },
+    shouldConnect
+  );
 
   useEffect(() => {
     // Load Eruda script
@@ -94,8 +102,8 @@ const Unmute = () => {
 
   // Save chat history to local storage when it changes
   useEffect(() => {
-    saveChatHistory(rawChatHistory, unmuteConfig.voiceName);
-  }, [rawChatHistory, unmuteConfig.voiceName]);
+    saveChatHistory(chatHistory, unmuteConfig.voiceName);
+  }, [readyState, unmuteConfig.voiceName]);
 
   // Check if the backend server is healthy. If we setHealthStatus to null,
   // a "server is down" screen will be shown.
@@ -138,13 +146,6 @@ const Unmute = () => {
     checkHealth();
   }, [backendServerUrl]);
 
-  const { sendMessage, lastMessage, readyState } = useWebSocket(
-    webSocketUrl || null,
-    {
-      protocols: ["realtime"],
-    },
-    shouldConnect,
-  );
 
   // Send microphone audio to the server (via useAudioProcessor below)
   const onOpusRecorded = useCallback(
@@ -315,8 +316,7 @@ const Unmute = () => {
       }),
     );
     if (rawChatHistory.length > 0) {
-      const compressedHistory = compressChatHistory(rawChatHistory, "");
-      for (const message of compressedHistory) {
+      for (const message of chatHistory) {
         sendMessage(
           JSON.stringify({
             type: "conversation.item.create",

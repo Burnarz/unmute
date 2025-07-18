@@ -18,6 +18,9 @@ export const compressChatHistory = (
     ) {
       compressed[compressed.length - 1].content += `${separator}${message.content}`;
     } else {
+      if (typeof message.content === "string") {
+        message.content = message.content.trimStart();
+      }
       compressed.push({ ...message });
     }
   }

@@ -32,7 +32,7 @@ export const tools = [
         type: "function",
         function: {
             name: "get_news",
-            description: "Get the latest news headlines. You can filter by country, category, or sources.",
+            description: "Get the latest news headlines. You can filter by country, category, or sources. At least one of these parameters is required but source cannot be used with country or category.",
             parameters: {
                 type: "object",
                 properties: {

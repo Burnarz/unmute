@@ -207,7 +207,7 @@ export const useAudioVisualizerCircle = (
         role === "user" &&
         chatHistory[chatHistory.length - 1].role === "assistant" &&
         // An interruption
-        chatHistory[chatHistory.length - 1].content.endsWith(
+        chatHistory[chatHistory.length - 1].content?.endsWith(
           INTERRUPTION_CHAR
         ) &&
         // but not *only* an interruption char. That would mean the LLM got interrupted

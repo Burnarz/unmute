@@ -43,6 +43,27 @@ const Unmute = () => {
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
   const chatHistory = compressChatHistory(rawChatHistory, "");
+  const displayChatHistory = chatHistory.map(
+    (message) => {
+      if (message.role === "tool") {
+        return {          
+          role: "user",
+          content: `Tool output: ${message.content}`,
+        };
+      }
+      if (message.role === "assistant" && message.tool_calls) {
+        return {
+          role: "assistant",
+          content: message.tool_calls.map((call) => {
+            return `Tool call: ${call.function.name}(${JSON.stringify(
+              call.function.arguments
+            )})`;
+          }).join("\n"),
+        };
+      }
+      return message;
+    }
+  );
 
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
 
@@ -259,7 +280,33 @@ const Unmute = () => {
           continue;
         }
 
+        setRawChatHistory((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: call.call_id,
+                type: "function",
+                function: {
+                  name: call.name,
+                  arguments: call.arguments,
+                },
+              },
+            ],
+          },
+        ]);
+
         handleToolCall(call, backendServerUrl).then(toolResult => {
+          setRawChatHistory((prev) => [
+            ...prev,
+            {
+              role: "tool",
+              tool_call_id: call.call_id,
+              content: JSON.stringify(toolResult),
+            },
+          ]);
           const result = {
             type: "conversation.item.create",
             item: {
@@ -317,21 +364,43 @@ const Unmute = () => {
     );
     if (rawChatHistory.length > 0) {
       for (const message of chatHistory) {
-        sendMessage(
-          JSON.stringify({
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: message.role,
-              content: [
-                {
-                  type: "input_text",
-                  text: message.content.trimStart(),
-                },
-              ],
-            },
-          })
-        );
+        let item: object | undefined;
+
+        if (message.role === "tool") {
+          if (!message.tool_call_id || !message.content) continue;
+          item = {
+            type: "function_call_output",
+            call_id: message.tool_call_id,
+            output: message.content,
+          };
+        } else if (message.role === "assistant" && message.tool_calls) {
+          item = {
+            type: "message",
+            role: "assistant",
+            content: message.content, // can be null
+            tool_calls: message.tool_calls,
+          };
+        } else if (message.content) {
+          item = {
+            type: "message",
+            role: message.role,
+            content: [
+              {
+                type: "input_text",
+                text: message.content,
+              },
+            ],
+          };
+        }
+
+        if (item) {
+          sendMessage(
+            JSON.stringify({
+              type: "conversation.item.create",
+              item: item,
+            })
+          );
+        }
       }
     }
   }, [unmuteConfig, readyState, sendMessage]);
@@ -513,20 +582,20 @@ const Unmute = () => {
           )}
         >
           <PositionedAudioVisualizer
-            chatHistory={chatHistory}
+            chatHistory={displayChatHistory}
             role={"assistant"}
             analyserNode={audioProcessor.current?.outputAnalyser || null}
             onCircleClick={onConnectButtonPress}
             isConnected={shouldConnect}
           />
           <PositionedAudioVisualizer
-            chatHistory={chatHistory}
+            chatHistory={displayChatHistory}
             role={"user"}
             analyserNode={audioProcessor.current?.inputAnalyser || null}
             isConnected={shouldConnect}
           />
         </div>
-        {showSubtitles && <Subtitles chatHistory={chatHistory} />}
+        {showSubtitles && <Subtitles chatHistory={displayChatHistory} />}
         <UnmuteConfigurator
           backendServerUrl={backendServerUrl}
           config={unmuteConfig}

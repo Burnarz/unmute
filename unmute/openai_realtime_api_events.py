@@ -235,10 +235,22 @@ class FunctionCallOutputItem(BaseModel):
     output: str  # JSON string
 
 
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"]
+    function: ToolCallFunction
+
+
 class MessageItem(BaseModel):
     type: Literal["message"] = "message"
     role: Literal["user", "assistant"]
-    content: list[InputTextContent]
+    content: list[InputTextContent] | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 ConversationItem = Union[MessageItem, FunctionCallOutputItem]

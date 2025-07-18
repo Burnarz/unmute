@@ -567,8 +567,14 @@ async def receive_loop(
             if isinstance(message.item, ora.MessageItem):
                 new_message = {
                     "role": message.item.role,
-                    "content": message.item.content[0].text,
+                    "content": message.item.content[0].text
+                    if message.item.content
+                    else None,
                 }
+                if message.item.tool_calls:
+                    new_message["tool_calls"] = [
+                        tc.model_dump() for tc in message.item.tool_calls
+                    ]
             elif isinstance(message.item, ora.FunctionCallOutputItem):
                 new_message = {
                     "role": "tool",

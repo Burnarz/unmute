@@ -1,8 +1,19 @@
-export type ChatRole = "user" | "assistant" | "system";
+export type ChatRole = "user" | "assistant" | "system" | "tool";
+
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
 
 export type ChatMessage = {
   role: ChatRole;
-  content: string;
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 };
 
 /** If there are multiple messages from the same role in a row, combine them into one message */
@@ -14,7 +25,9 @@ export const compressChatHistory = (
   for (const message of chatHistory) {
     if (
       compressed.length > 0 &&
-      compressed[compressed.length - 1].role === message.role
+      compressed[compressed.length - 1].role === message.role &&
+      message.content && // Only merge if there is content
+      compressed[compressed.length - 1].content
     ) {
       compressed[compressed.length - 1].content += `${separator}${message.content}`;
     } else {

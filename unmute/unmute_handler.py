@@ -1,5 +1,6 @@
 import asyncio
 import math
+import random
 from functools import partial
 from logging import getLogger
 from pathlib import Path
@@ -57,6 +58,14 @@ DEBUG_PLOT_HISTORY_SEC = 10.0
 
 USER_SILENCE_TIMEOUT = 7.0
 FIRST_MESSAGE_TEMPERATURE = 1.0
+
+TOOL_CALL_CONFIRMATION_PHRASES = [
+    "Je m'en occupe tout de suite.",
+    "Laissez-moi vérifier ça.",
+    "Je regarde ça pour vous.",
+    "Un instant, je cherche.",
+    "Très bien, je m'en charge.",
+]
 
 FURTHER_MESSAGES_TEMPERATURE = 1.0
 LLM_EXTRA_BODY = {
@@ -121,6 +130,8 @@ class UnmuteHandler(AsyncStreamHandler):
 
         self.tts_voice: str | None = None  # Stored separately because TTS is restarted
         self.tts_output_stopwatch = Stopwatch()
+        self.tts_confirmation_done = asyncio.Event()
+        self.expecting_tts_confirmation = False
 
         self.chatbot = Chatbot()
         self.openai_client = get_openai_client()
@@ -239,8 +250,9 @@ class UnmuteHandler(AsyncStreamHandler):
         tts = None
 
         response_words = []
-        tool_calls = {}  # Storing tool calls by call_id
-        sent_arguments = {}  # Storing sent arguments length by call_id
+        tool_calls = {}
+        sent_arguments = {}
+        tool_call_confirmation = None
         error_from_tts = False
         time_to_first_token = None
         num_words_sent = sum(
@@ -296,6 +308,36 @@ class UnmuteHandler(AsyncStreamHandler):
                         tool_calls[call_id] = tool_call
                         sent_arguments[call_id] = 0
 
+                        if len(tool_calls) == 1:
+                            text_before_tool = "".join(response_words).strip()
+                            prev_message = self.chatbot.chat_history[generating_message_i - 2] if generating_message_i >= 2 else None
+                            is_after_tool_result = prev_message and prev_message.get("role") == "tool"
+                            
+                            if len(text_before_tool) < 20 and not is_after_tool_result:
+                                tool_call_confirmation = random.choice(TOOL_CALL_CONFIRMATION_PHRASES)
+                                logger.info("First tool call detected, sending TTS confirmation: %s", tool_call_confirmation)
+                                
+                                self.tts_confirmation_done.clear()
+                                self.expecting_tts_confirmation = True
+                                
+                                self.tts_output_stopwatch.start_if_not_started()
+                                try:
+                                    tts = await quest.get()
+                                except Exception:
+                                    error_from_tts = True
+                                    raise
+                                
+                                await tts.send(tool_call_confirmation)
+                                await self.output_queue.put(ora.ResponseTextDelta(delta=tool_call_confirmation))
+                                await tts.send(TTSClientEosMessage())
+                                
+                                try:
+                                    await asyncio.wait_for(self.tts_confirmation_done.wait(), timeout=3.0)
+                                    logger.info("TTS confirmation audio fully consumed")
+                                except asyncio.TimeoutError:
+                                    logger.warning("Timeout waiting for TTS confirmation audio")
+                                    self.expecting_tts_confirmation = False
+
                     # Send argument delta
                     all_args = tool_call.function.arguments
                     sent_len = sent_arguments[call_id]
@@ -312,7 +354,7 @@ class UnmuteHandler(AsyncStreamHandler):
             if tool_calls:
                 assistant_message = {
                     "role": "assistant",
-                    "content": None,
+                    "content": tool_call_confirmation,
                     "tool_calls": [
                         {
                             "id": tc.id,
@@ -655,6 +697,11 @@ class UnmuteHandler(AsyncStreamHandler):
                     )
                 else:
                     logger.warning("Got unexpected message from TTS: %s", message.type)
+
+            if self.expecting_tts_confirmation:
+                self.expecting_tts_confirmation = False
+                self.tts_confirmation_done.set()
+                logger.info("TTS confirmation audio finished")
 
         except websockets.ConnectionClosedError as e:
             logger.error(f"TTS connection closed with an error: {e}")

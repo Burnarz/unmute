@@ -57,6 +57,20 @@ export const tools = [
                 required: [],
             },
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "home_assistant",
+            description: "Send a text command to Home Assistant. Use this to control smart home devices, ask about sensor states, or trigger automations. Examples: 'turn on the living room lights', 'what is the temperature in the bedroom', 'close the garage door'.",
+            parameters: {
+                type: "object",
+                properties: {
+                    text: { type: "string", description: "The text command to send to Home Assistant in natural language" }
+                },
+                required: ["text"],
+            },
+        }
     }
 ];
 
@@ -120,6 +134,46 @@ async function getNewsSources(backendServerUrl: string, {category}: {category?: 
     return data.sources;
 }
 
+async function homeAssistant({text}: {text: string}) {
+    const haUrl = localStorage.getItem("homeAssistantUrl");
+    const haToken = localStorage.getItem("homeAssistantToken");
+
+    if (!haUrl || !haToken) {
+        return { error: "Home Assistant not configured. Please set homeAssistantUrl and homeAssistantToken in localStorage." };
+    }
+
+    try {
+        const response = await fetch(`${haUrl}/api/conversation/process`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${haToken}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                text: text,
+                language: "fr",
+                agent_id: "conversation.home_assistant",
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            return { error: `Home Assistant request failed with status ${response.status}: ${errorText}` };
+        }
+
+        const data = await response.json();
+        return {
+            response: data.response?.speech?.plain?.speech || data.response?.speech?.plain?.response || "Command sent",
+            success: true,
+        };
+    } catch (error) {
+        if (error instanceof Error) {
+            return { error: error.message };
+        }
+        return { error: "Unknown error connecting to Home Assistant" };
+    }
+}
+
 
 export async function handleToolCall(call: { name: string, arguments: string }, backendServerUrl: string) {
     console.log(`Handling function call: ${call.name}`);
@@ -141,6 +195,9 @@ export async function handleToolCall(call: { name: string, arguments: string }, 
                 break;
             case 'get_news_sources':
                 result = await getNewsSources(backendServerUrl, args);
+                break;
+            case 'home_assistant':
+                result = await homeAssistant(args);
                 break;
             default:
                 result = { error: `Unknown function call: ${call.name}` };

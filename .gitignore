@@ -24,3 +24,6 @@ certs/
 volumes/
 CLAUDE.md
 .claude/settings.local.json
+docker-compose.yml
+services/moshi-server/configs/tts.toml
+voices.yaml

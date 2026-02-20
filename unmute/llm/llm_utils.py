@@ -38,7 +38,8 @@ def preprocess_messages_for_llm(
 
         # If the llm was interrupted we don't want to insert the INTERRUPTION_CHAR
         # into the context, otherwise the LLM might want to repeat it.
-        message["content"] = message["content"].strip().removesuffix(INTERRUPTION_CHAR)
+        if isinstance(message.get("content"), str):
+            message["content"] = message["content"].strip().removesuffix(INTERRUPTION_CHAR)
 
         if (
             output

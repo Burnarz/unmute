@@ -370,6 +370,54 @@ async def proxy_news_sources(request: Request):
     return JSONResponse(content=response.json())
 
 
+class HomeAssistantRequest(BaseModel):
+    text: str
+
+
+@app.post("/v1/proxy/homeassistant/conversation")
+async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
+    ha_url = os.environ.get("HOME_ASSISTANT_URL")
+    ha_token = os.environ.get("HOME_ASSISTANT_TOKEN")
+    
+    if not ha_url:
+        raise HTTPException(status_code=500, detail="HOME_ASSISTANT_URL environment variable is not set")
+    if not ha_token:
+        raise HTTPException(status_code=500, detail="HOME_ASSISTANT_TOKEN environment variable is not set")
+    
+    try:
+        response = requests.post(
+            f"{ha_url}/api/conversation/process",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": request.text,
+                "language": "fr",
+                "agent_id": "conversation.home_assistant",
+            },
+            timeout=10,
+        )
+        
+        if response.status_code != 200:
+            return JSONResponse(
+                content={"error": f"Home Assistant returned status {response.status_code}: {response.text}"},
+                status_code=response.status_code
+            )
+        
+        data = response.json()
+        return {
+            "response": data.get("response", {}).get("speech", {}).get("plain", {}).get("speech", "Command sent"),
+            "success": True,
+        }
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Cannot connect to Home Assistant")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Home Assistant request timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Home Assistant error: {str(e)}")
+
+
 @app.websocket("/v1/realtime")
 async def websocket_route(websocket: WebSocket):
     global _last_profile, _current_profile

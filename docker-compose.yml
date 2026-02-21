@@ -1,0 +1,111 @@
+services:
+  traefik:
+    image: traefik:latest
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirection HTTP vers HTTPS
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./certs:/certs:ro"
+  
+  frontend:
+    image: unmute-frontend:latest
+    build:
+      context: frontend/
+      dockerfile: hot-reloading.Dockerfile
+    volumes:
+      - ./frontend/src:/app/src
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.routers.frontend.priority=10"
+  
+  backend:
+    image: unmute-backend:latest
+    build:
+      context: ./
+      target: hot-reloading
+    volumes:
+      - ./unmute:/app/unmute
+    environment:
+      - KYUTAI_STT_URL=ws://stt:8080
+      - KYUTAI_TTS_URL=ws://tts:8080
+      - KYUTAI_LLM_URL=${LLM_URL}
+      - KYUTAI_LLM_MODEL=${LLM_MODEL}
+      - KYUTAI_LLM_API_KEY=ollama
+      - NEWSAPI_API_KEY=${NEWSAPI_API_KEY}
+      - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}
+      - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.middlewares=strip-api"
+      - "traefik.http.middlewares.strip-api.replacepathregex.regex=^/api/(.*)"
+      - "traefik.http.middlewares.strip-api.replacepathregex.replacement=/$$1"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=80"
+      - "traefik.http.routers.backend.priority=100"
+      - "prometheus-port=80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  
+  tts:
+    image: moshi-server:latest
+    command: ["worker", "--config", "configs/tts.toml"]
+    build:
+      context: services/moshi-server
+      dockerfile: public.Dockerfile
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    volumes:
+      - ./volumes/hf-cache:/root/.cache/huggingface
+      - ./volumes/cargo-registry-tts:/root/.cargo/registry
+      - ./volumes/tts-target:/app/target
+      - ./volumes/uv-cache:/root/.cache/uv
+      - /tmp/models/:/models
+      - ./volumes/tts-logs:/tmp/unmute_logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  
+  stt:
+    image: moshi-server:latest
+    command: ["worker", "--config", "configs/stt.toml"]
+    build:
+      context: services/moshi-server
+      dockerfile: public.Dockerfile
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    volumes:
+      - ./volumes/hf-cache:/root/.cache/huggingface
+      - ./volumes/cargo-registry-stt:/root/.cargo/registry
+      - ./volumes/stt-target:/app/target
+      - ./volumes/uv-cache:/root/.cache/uv
+      - /tmp/models/:/models
+      - ./volumes/stt-logs:/tmp/unmute_logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  default:

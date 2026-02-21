@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import VoiceAttribution from "./VoiceAttribution";
 import SquareButton from "./SquareButton";
 import Modal from "./Modal";
-import { ArrowUpRight, Home } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import VoiceUpload from "./VoiceUpload";
 // import VoiceUpload from "./VoiceUpload";
 
@@ -138,28 +138,6 @@ const UnmuteConfigurator = ({
   const [customVoiceName, setCustomVoiceName] = useState<string | null>(null);
   const [customInstructions, setCustomInstructions] =
     useState<Instructions | null>(null);
-  const [haUrl, setHaUrl] = useState<string>("");
-  const [haToken, setHaToken] = useState<string>("");
-
-  useEffect(() => {
-    const storedUrl = localStorage.getItem("homeAssistantUrl") || "";
-    const storedToken = localStorage.getItem("homeAssistantToken") || "";
-    setHaUrl(storedUrl);
-    setHaToken(storedToken);
-  }, []);
-
-  const saveHaConfig = useCallback(() => {
-    if (haUrl) {
-      localStorage.setItem("homeAssistantUrl", haUrl);
-    } else {
-      localStorage.removeItem("homeAssistantUrl");
-    }
-    if (haToken) {
-      localStorage.setItem("homeAssistantToken", haToken);
-    } else {
-      localStorage.removeItem("homeAssistantToken");
-    }
-  }, [haUrl, haToken]);
 
   useEffect(() => {
     const fetchVoicesData = async () => {
@@ -330,49 +308,6 @@ const UnmuteConfigurator = ({
               filter: "drop-shadow(-0.1rem -0.1rem 0.1rem var(--darkgray))",
             }}
           />
-        </div>
-        <div className="w-full max-w-6xl px-3 pb-3">
-          <Modal
-            trigger={
-              <button className="flex items-center gap-2 text-lightgray hover:text-white transition-colors">
-                <Home size={18} />
-                <span className="text-sm">Home Assistant {haUrl ? "✓" : ""}</span>
-              </button>
-            }
-          >
-            <div className="flex flex-col gap-4 p-4">
-              <h3 className="text-lg font-bold">Home Assistant Configuration</h3>
-              <p className="text-sm text-gray-400">
-                Configure your Home Assistant instance to control smart home devices.
-              </p>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm">URL (e.g. http://homeassistant.local:8123)</label>
-                <input
-                  type="text"
-                  value={haUrl}
-                  onChange={(e) => setHaUrl(e.target.value)}
-                  className="bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-white outline-none"
-                  placeholder="http://homeassistant.local:8123"
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm">Long-Lived Access Token</label>
-                <input
-                  type="password"
-                  value={haToken}
-                  onChange={(e) => setHaToken(e.target.value)}
-                  className="bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-white outline-none"
-                  placeholder="Your access token"
-                />
-              </div>
-              <button
-                onClick={saveHaConfig}
-                className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded transition-colors"
-              >
-                Save Configuration
-              </button>
-            </div>
-          </Modal>
         </div>
       </div>
     </div>

@@ -134,38 +134,22 @@ async function getNewsSources(backendServerUrl: string, {category}: {category?: 
     return data.sources;
 }
 
-async function homeAssistant({text}: {text: string}) {
-    const haUrl = localStorage.getItem("homeAssistantUrl");
-    const haToken = localStorage.getItem("homeAssistantToken");
-
-    if (!haUrl || !haToken) {
-        return { error: "Home Assistant not configured. Please set homeAssistantUrl and homeAssistantToken in localStorage." };
-    }
-
+async function homeAssistant(backendServerUrl: string, {text}: {text: string}) {
     try {
-        const response = await fetch(`${haUrl}/api/conversation/process`, {
+        const response = await fetch(`${backendServerUrl}/v1/proxy/homeassistant/conversation`, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${haToken}`,
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-                text: text,
-                language: "fr",
-                agent_id: "conversation.home_assistant",
-            }),
+            body: JSON.stringify({ text }),
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            return { error: `Home Assistant request failed with status ${response.status}: ${errorText}` };
+            const errorData = await response.json().catch(() => ({}));
+            return { error: errorData.detail || `Home Assistant request failed with status ${response.status}` };
         }
 
-        const data = await response.json();
-        return {
-            response: data.response?.speech?.plain?.speech || data.response?.speech?.plain?.response || "Command sent",
-            success: true,
-        };
+        return await response.json();
     } catch (error) {
         if (error instanceof Error) {
             return { error: error.message };
@@ -197,7 +181,7 @@ export async function handleToolCall(call: { name: string, arguments: string }, 
                 result = await getNewsSources(backendServerUrl, args);
                 break;
             case 'home_assistant':
-                result = await homeAssistant(args);
+                result = await homeAssistant(backendServerUrl, args);
                 break;
             default:
                 result = { error: `Unknown function call: ${call.name}` };

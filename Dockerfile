@@ -1,6 +1,9 @@
 FROM ghcr.io/astral-sh/uv:0.6.17-debian AS build
 WORKDIR /app
 
+# Install Node.js for MCP servers
+RUN apt-get update && apt-get install -y nodejs npm && rm -rf /var/lib/apt/lists/*
+
 ENV UV_COMPILE_BYTECODE=1 UV_LOCKED=1
 
 RUN --mount=type=bind,source=uv.lock,target=uv.lock \

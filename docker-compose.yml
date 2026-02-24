@@ -38,6 +38,8 @@ services:
       target: hot-reloading
     volumes:
       - ./unmute:/app/unmute
+      - ${JARVIS_SHARE_PATH}:/app/partage
+      - ${GOOGLE_TOKENS_PATH}:/app/GoogleTokens
     environment:
       - KYUTAI_STT_URL=ws://stt:8080
       - KYUTAI_TTS_URL=ws://tts:8080
@@ -47,6 +49,15 @@ services:
       - NEWSAPI_API_KEY=${NEWSAPI_API_KEY}
       - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}
       - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
+      - MCP_FILE_SERVER_COMMAND=${MCP_FILE_SERVER_COMMAND}
+      - MCP_FILE_SERVER_ARGS=${MCP_FILE_SERVER_ARGS}
+      - MCP_FETCH_SERVER_COMMAND=${MCP_FETCH_SERVER_COMMAND}
+      - MCP_FETCH_SERVER_ARGS=${MCP_FETCH_SERVER_ARGS}
+      - MCP_GSUITE_SERVER_COMMAND=${MCP_GSUITE_SERVER_COMMAND}
+      - MCP_GSUITE_SERVER_ARGS=${MCP_GSUITE_SERVER_ARGS}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
+      # - MCP_BRAVE_COMMAND=${MCP_BRAVE_COMMAND}
+      # - MCP_BRAVE_ARGS=${MCP_BRAVE_ARGS}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"

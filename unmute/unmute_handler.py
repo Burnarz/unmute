@@ -243,7 +243,7 @@ class UnmuteHandler(AsyncStreamHandler):
         )
 
         messages = self.chatbot.preprocessed_messages()
-        tools = self.chatbot.tools
+        tools = self.chatbot.get_all_tools()
         tool_choice = self.chatbot.tool_choice
 
         self.tts_output_stopwatch = Stopwatch(autostart=False)
@@ -791,6 +791,17 @@ class UnmuteHandler(AsyncStreamHandler):
             self.chatbot.tools = session.tools
         if session.tool_choice:
             self.chatbot.tool_choice = session.tool_choice
+        
+        # Fetch and cache MCP tools once (not on every request)
+        try:
+            from unmute.mcp_manager import get_mcp_manager
+            mcp_manager = await get_mcp_manager()
+            mcp_tools = mcp_manager.get_tools_for_llm()
+            if mcp_tools:
+                self.chatbot.mcp_tools = mcp_tools
+                logger.info("Cached %d MCP tools", len(mcp_tools))
+        except Exception as e:
+            logger.warning("Failed to fetch MCP tools: %s", e)
 
         if not session.allow_recording and self.recorder:
             await self.recorder.add_event("client", ora.SessionUpdate(session=session))

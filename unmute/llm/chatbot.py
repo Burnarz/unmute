@@ -18,7 +18,24 @@ class Chatbot:
         ]
         self._instructions: Instructions | None = None
         self.tools: list[dict[str, Any]] | None = None
+        self.mcp_tools: list[dict[str, Any]] | None = None
         self.tool_choice: str | None = None
+    
+    def get_all_tools(self) -> list[dict[str, Any]]:
+        """Get all tools (built-in + MCP) merged."""
+        all_tools = list(self.tools or [])
+        
+        if self.mcp_tools:
+            existing_names = set()
+            for tool in all_tools:
+                if isinstance(tool, dict) and "function" in tool:
+                    existing_names.add(tool["function"].get("name"))
+            
+            for mcp_tool in self.mcp_tools:
+                if mcp_tool.get("function", {}).get("name") not in existing_names:
+                    all_tools.append(mcp_tool)
+        
+        return all_tools
 
     def conversation_state(self) -> ConversationState:
         if not self.chat_history:

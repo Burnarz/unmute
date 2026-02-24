@@ -33,7 +33,7 @@ import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 import Modal from "./Modal";
-import { tools, handleToolCall } from "./tools";
+import { tools, handleToolCall, fetchMcpTools, getAllTools } from "./tools";
 
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
@@ -42,6 +42,7 @@ const Unmute = () => {
     DEFAULT_UNMUTE_CONFIG,
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
+  const [mcpTools, setMcpTools] = useState<any[]>([]);
   const chatHistory = compressChatHistory(rawChatHistory, "");
   const displayChatHistory = chatHistory.map(
     (message) => {
@@ -165,6 +166,14 @@ const Unmute = () => {
     };
 
     checkHealth();
+  }, [backendServerUrl]);
+
+  useEffect(() => {
+    if (!backendServerUrl) return;
+    
+    fetchMcpTools(backendServerUrl).then((fetchedTools) => {
+      setMcpTools(fetchedTools);
+    });
   }, [backendServerUrl]);
 
 
@@ -357,7 +366,7 @@ const Unmute = () => {
           instructions: unmuteConfig.instructions,
           voice: unmuteConfig.voice,
           allow_recording: recordingConsent,
-          tools: tools,
+          tools: getAllTools(mcpTools),
           tool_choice: "auto",
         },
       }),
@@ -403,7 +412,7 @@ const Unmute = () => {
         }
       }
     }
-  }, [unmuteConfig, readyState, sendMessage]);
+  }, [unmuteConfig, readyState, sendMessage, mcpTools]);
 
   // Disconnect when the voice or instruction changes.
   // TODO: If it's a voice change, immediately reconnect with the new voice.

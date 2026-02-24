@@ -4,7 +4,7 @@ import base64
 import json
 import logging
 from functools import cache, partial
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 import requests
@@ -66,6 +66,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Pre-initialize MCP manager at server startup."""
+    try:
+        from unmute.mcp_manager import get_mcp_manager
+        logger.info("Pre-initializing MCP manager...")
+        manager = await get_mcp_manager()
+        tool_count = len(manager.get_all_tools())
+        logger.info("MCP manager initialized with %d tools", tool_count)
+    except Exception as e:
+        logger.warning("Failed to pre-initialize MCP manager: %s", e)
+
 
 # We prefer to scale this by running more instances of the server than having a single
 # server handle more. This is to avoid the GIL.
@@ -416,6 +430,74 @@ async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
         raise HTTPException(status_code=504, detail="Home Assistant request timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Home Assistant error: {str(e)}")
+
+
+class MCPToolCallRequest(BaseModel):
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/v1/mcp/tools")
+async def get_mcp_tools():
+    """Get all available MCP tools in OpenAI function calling format."""
+    from unmute.mcp_manager import get_mcp_manager
+    
+    try:
+        manager = await get_mcp_manager()
+        tools = manager.get_tools_for_llm()
+        return {"tools": tools, "count": len(tools)}
+    except Exception as e:
+        logger.error("Failed to get MCP tools: %s", e)
+        return {"tools": [], "count": 0, "error": str(e)}
+
+
+@app.post("/v1/mcp/call")
+async def call_mcp_tool(request: MCPToolCallRequest):
+    """Call an MCP tool by name."""
+    from unmute.mcp_manager import get_mcp_manager
+    
+    try:
+        manager = await get_mcp_manager()
+        
+        if not manager.is_tool_from_mcp(request.name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tool '{request.name}' is not an MCP tool"
+            )
+        
+        result = await manager.call_tool(request.name, request.arguments)
+        return {"success": True, "result": result}
+    
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("MCP tool call failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"MCP tool call failed: {str(e)}")
+
+
+@app.get("/v1/mcp/status")
+async def get_mcp_status():
+    """Get the status of all MCP server connections."""
+    from unmute.mcp_manager import get_mcp_manager
+    
+    try:
+        manager = await get_mcp_manager()
+        servers = []
+        for name, connection in manager.servers.items():
+            servers.append({
+                "name": name,
+                "connected": connection.session is not None,
+                "tool_count": len(connection.tools),
+                "tools": [t.name for t in connection.tools],
+            })
+        return {
+            "initialized": manager._initialized,
+            "server_count": len(manager.servers),
+            "servers": servers,
+        }
+    except Exception as e:
+        logger.error("Failed to get MCP status: %s", e)
+        return {"error": str(e), "initialized": False, "server_count": 0, "servers": []}
 
 
 @app.websocket("/v1/realtime")

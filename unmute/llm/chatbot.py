@@ -1,12 +1,20 @@
+import os
 from logging import getLogger
 from typing import Any, Literal
 
 from unmute.llm.llm_utils import preprocess_messages_for_llm
+from unmute.llm.context_optimizer import (
+    truncate_context_to_token_limit,
+    estimate_messages_tokens,
+)
 from unmute.llm.system_prompt import ConstantInstructions, Instructions
 
 ConversationState = Literal["waiting_for_user", "user_speaking", "bot_speaking"]
 
 logger = getLogger(__name__)
+
+MAX_CONTEXT_TOKENS = int(os.environ.get("MAX_CONTEXT_TOKENS", "4096"))
+MAX_TOOLS_TOKENS = int(os.environ.get("MAX_TOOLS_TOKENS", "2048"))
 
 
 class Chatbot:
@@ -20,21 +28,21 @@ class Chatbot:
         self.tools: list[dict[str, Any]] | None = None
         self.mcp_tools: list[dict[str, Any]] | None = None
         self.tool_choice: str | None = None
-    
+
     def get_all_tools(self) -> list[dict[str, Any]]:
         """Get all tools (built-in + MCP) merged."""
         all_tools = list(self.tools or [])
-        
+
         if self.mcp_tools:
             existing_names = set()
             for tool in all_tools:
                 if isinstance(tool, dict) and "function" in tool:
                     existing_names.add(tool["function"].get("name"))
-            
+
             for mcp_tool in self.mcp_tools:
                 if mcp_tool.get("function", {}).get("name") not in existing_names:
                     all_tools.append(mcp_tool)
-        
+
         return all_tools
 
     def conversation_state(self) -> ConversationState:
@@ -110,7 +118,27 @@ class Chatbot:
             ]
 
         messages = preprocess_messages_for_llm(messages)
+
+        current_tokens = estimate_messages_tokens(messages)
+
+        if current_tokens > MAX_CONTEXT_TOKENS:
+            all_tools = self.get_all_tools()
+            messages, filtered_tools = truncate_context_to_token_limit(
+                messages,
+                MAX_CONTEXT_TOKENS,
+                MAX_TOOLS_TOKENS if all_tools else None,
+                all_tools,
+            )
+            if filtered_tools is not None:
+                self._filtered_tools = filtered_tools
+        else:
+            self._filtered_tools = None
+
         return messages
+
+    def get_filtered_tools(self):
+        """Get tools filtered by context relevance if applicable."""
+        return getattr(self, "_filtered_tools", None)
 
     def set_instructions(self, instructions: Instructions):
         # Note that make_system_prompt() might not be deterministic, so we run it only
@@ -134,7 +162,9 @@ class Chatbot:
         valid_messages = [
             message
             for message in self.chat_history
-            if message["role"] == role and message.get("content") and message["content"].strip() != ""
+            if message["role"] == role
+            and message.get("content")
+            and message["content"].strip() != ""
         ]
         if valid_messages:
             return valid_messages[-1]["content"]

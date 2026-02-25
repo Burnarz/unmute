@@ -69,9 +69,9 @@ TOOL_CALL_CONFIRMATION_PHRASES = [
 
 FURTHER_MESSAGES_TEMPERATURE = 1.0
 LLM_EXTRA_BODY = {
-    'top_p': 0.95,
-    'top_k': 60,
-    'min_p': 0.0,
+    "top_p": 0.95,
+    "top_k": 60,
+    "min_p": 0.0,
 }
 
 # FURTHER_MESSAGES_TEMPERATURE = 0.6
@@ -243,7 +243,7 @@ class UnmuteHandler(AsyncStreamHandler):
         )
 
         messages = self.chatbot.preprocessed_messages()
-        tools = self.chatbot.get_all_tools()
+        tools = self.chatbot.get_filtered_tools() or self.chatbot.get_all_tools()
         tool_choice = self.chatbot.tool_choice
 
         self.tts_output_stopwatch = Stopwatch(autostart=False)
@@ -281,9 +281,9 @@ class UnmuteHandler(AsyncStreamHandler):
 
                     if time_to_first_token is None:
                         time_to_first_token = llm_stopwatch.time()
-                        self.debug_dict["timing"][
-                            "to_first_token"
-                        ] = time_to_first_token
+                        self.debug_dict["timing"]["to_first_token"] = (
+                            time_to_first_token
+                        )
                         mt.VLLM_TTFT.observe(time_to_first_token)
                         logger.info("Sending first word to TTS: %s", delta)
 
@@ -310,32 +310,49 @@ class UnmuteHandler(AsyncStreamHandler):
 
                         if len(tool_calls) == 1:
                             text_before_tool = "".join(response_words).strip()
-                            prev_message = self.chatbot.chat_history[generating_message_i - 2] if generating_message_i >= 2 else None
-                            is_after_tool_result = prev_message and prev_message.get("role") == "tool"
-                            
+                            prev_message = (
+                                self.chatbot.chat_history[generating_message_i - 2]
+                                if generating_message_i >= 2
+                                else None
+                            )
+                            is_after_tool_result = (
+                                prev_message and prev_message.get("role") == "tool"
+                            )
+
                             if len(text_before_tool) < 20 and not is_after_tool_result:
-                                tool_call_confirmation = random.choice(TOOL_CALL_CONFIRMATION_PHRASES)
-                                logger.info("First tool call detected, sending TTS confirmation: %s", tool_call_confirmation)
-                                
+                                tool_call_confirmation = random.choice(
+                                    TOOL_CALL_CONFIRMATION_PHRASES
+                                )
+                                logger.info(
+                                    "First tool call detected, sending TTS confirmation: %s",
+                                    tool_call_confirmation,
+                                )
+
                                 self.tts_confirmation_done.clear()
                                 self.expecting_tts_confirmation = True
-                                
+
                                 self.tts_output_stopwatch.start_if_not_started()
                                 try:
                                     tts = await quest.get()
                                 except Exception:
                                     error_from_tts = True
                                     raise
-                                
+
                                 await tts.send(tool_call_confirmation)
-                                await self.output_queue.put(ora.ResponseTextDelta(delta=tool_call_confirmation))
+                                await self.output_queue.put(
+                                    ora.ResponseTextDelta(delta=tool_call_confirmation)
+                                )
                                 await tts.send(TTSClientEosMessage())
-                                
+
                                 try:
-                                    await asyncio.wait_for(self.tts_confirmation_done.wait(), timeout=3.0)
+                                    await asyncio.wait_for(
+                                        self.tts_confirmation_done.wait(), timeout=3.0
+                                    )
                                     logger.info("TTS confirmation audio fully consumed")
                                 except asyncio.TimeoutError:
-                                    logger.warning("Timeout waiting for TTS confirmation audio")
+                                    logger.warning(
+                                        "Timeout waiting for TTS confirmation audio"
+                                    )
                                     self.expecting_tts_confirmation = False
 
                     # Send argument delta
@@ -391,7 +408,9 @@ class UnmuteHandler(AsyncStreamHandler):
                     usage={},  # TODO: get usage info
                     metadata=None,
                 )
-                await self.output_queue.put(ora.ResponseDone(response=response_for_done))
+                await self.output_queue.put(
+                    ora.ResponseDone(response=response_for_done)
+                )
             else:
                 await self.output_queue.put(
                     # The words include the whitespace, so no need to add it here
@@ -791,10 +810,11 @@ class UnmuteHandler(AsyncStreamHandler):
             self.chatbot.tools = session.tools
         if session.tool_choice:
             self.chatbot.tool_choice = session.tool_choice
-        
+
         # Fetch and cache MCP tools once (not on every request)
         try:
             from unmute.mcp_manager import get_mcp_manager
+
             mcp_manager = await get_mcp_manager()
             mcp_tools = mcp_manager.get_tools_for_llm()
             if mcp_tools:

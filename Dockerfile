@@ -1,8 +1,20 @@
 FROM ghcr.io/astral-sh/uv:0.6.17-debian AS build
 WORKDIR /app
 
-# Install Node.js for MCP servers
-RUN apt-get update && apt-get install -y nodejs npm && rm -rf /var/lib/apt/lists/*
+# Installation de Node.js 20 via le script Nodesource
+RUN apt-get update && apt-get install -y curl ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure npm to install global packages in a known location
+RUN npm config set prefix /app/node_modules
+
+# Install MCP memory server
+RUN mkdir -p /app/node_modules && \
+    npm install -g @modelcontextprotocol/server-memory
 
 ENV UV_COMPILE_BYTECODE=1 UV_LOCKED=1
 

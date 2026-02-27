@@ -18,12 +18,6 @@ import Subtitles from "./Subtitles";
 import {
   ChatMessage,
   compressChatHistory,
-  loadChatHistory,
-  saveChatHistory,
-  saveMemory,
-  getMemoryList,
-  loadMemory,
-  clearChatHistory,
 } from "./chatHistory";
 import useWakeLock from "./useWakeLock";
 import ErrorMessages, { ErrorItem, makeErrorItem } from "./ErrorMessages";
@@ -32,7 +26,6 @@ import { useGoogleAnalytics } from "./useGoogleAnalytics";
 import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
-import Modal from "./Modal";
 import { tools, handleToolCall, fetchMcpTools, getAllTools } from "./tools";
 
 const Unmute = () => {
@@ -73,8 +66,6 @@ const Unmute = () => {
   const [webSocketUrl, setWebSocketUrl] = useState<string | null>(null);
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [errors, setErrors] = useState<ErrorItem[]>([]);
-  const [savedMemories, setSavedMemories] = useState<string[]>([]);
-  const [closeModalSignal, setCloseModalSignal] = useState(0);
 
   useWakeLock(shouldConnect);
   const { analyticsOnDownloadRecording } = useGoogleAnalytics({
@@ -115,17 +106,6 @@ const Unmute = () => {
       }
     };
   }, []);
-
-  // Load chat history from local storage when the component mounts
-  useEffect(() => {
-    setRawChatHistory(loadChatHistory(unmuteConfig.voiceName));
-    setSavedMemories(getMemoryList(unmuteConfig.voiceName));
-  }, [unmuteConfig.voiceName]);
-
-  // Save chat history to local storage when it changes
-  useEffect(() => {
-    saveChatHistory(chatHistory, unmuteConfig.voiceName);
-  }, [readyState, unmuteConfig.voiceName]);
 
   // Check if the backend server is healthy. If we setHealthStatus to null,
   // a "server is down" screen will be shown.
@@ -215,6 +195,7 @@ const Unmute = () => {
     } else {
       setShouldConnect(false);
       shutdownAudio();
+      setRawChatHistory([]);
     }
   };
 
@@ -229,11 +210,12 @@ const Unmute = () => {
     }
   };
 
-  // If the websocket connection is closed, shut down the audio processing
+  // If the websocket connection is closed, shut down the audio processing and reset memory
   useEffect(() => {
     if (readyState === ReadyState.CLOSING || readyState === ReadyState.CLOSED) {
       setShouldConnect(false);
       shutdownAudio();
+      setRawChatHistory([]);
     }
   }, [readyState, shutdownAudio]);
 
@@ -419,148 +401,8 @@ const Unmute = () => {
   useEffect(() => {
     setShouldConnect(false);
     shutdownAudio();
+    setRawChatHistory([]);
   }, [shutdownAudio, unmuteConfig.voice, unmuteConfig.instructions]);
-
-  const handleSaveMemory = () => {
-    saveMemory(unmuteConfig.voiceName);
-    setSavedMemories(getMemoryList(unmuteConfig.voiceName));
-    alert("Memory saved to local storage!");
-  };
-
-  const handleSelectMemory = (memory: string) => {
-    loadMemory(unmuteConfig.voiceName, memory);
-    setRawChatHistory(loadChatHistory(unmuteConfig.voiceName));
-    setCloseModalSignal((s) => s + 1);
-  };
-
-  const handleClearMemory = () => {
-    if (confirm("Are you sure you want to clear the memory?")) {
-      clearChatHistory(unmuteConfig.voiceName);
-      setRawChatHistory([]);
-    }
-  };
-
-  const handleUploadMemories = async () => {
-    if (
-      !confirm(
-        "This will upload all your local memories to the server. Are you sure?"
-      )
-    ) {
-      return;
-    }
-
-    const memoryKeys = getMemoryList(unmuteConfig.voiceName);
-    if (memoryKeys.length === 0) {
-      alert("No local memories to upload.");
-      return;
-    }
-
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const timestamp of memoryKeys) {
-      const memoryKey = `chatHistory_${unmuteConfig.voiceName}_memory_${timestamp}`;
-      const memoryHistory = localStorage.getItem(memoryKey);
-      if (memoryHistory) {
-        try {
-          const filename = `${timestamp}.json`;
-          const file = new File([memoryHistory], filename, {
-            type: "application/json",
-          });
-          const formData = new FormData();
-          formData.append("file", file);
-
-          const response = await fetch(
-            `${backendServerUrl}/v1/memories/${unmuteConfig.voiceName}`,
-            {
-              method: "POST",
-              body: formData,
-            }
-          );
-
-          if (response.ok) {
-            successCount++;
-          } else {
-            console.error(
-              `Failed to upload memory ${timestamp}`,
-              await response.text()
-            );
-            errorCount++;
-          }
-        } catch (error) {
-          console.error(`Failed to upload memory ${timestamp}`, error);
-          errorCount++;
-        }
-      }
-    }
-
-    alert(
-      `Upload complete. ${successCount} memories uploaded successfully, ${errorCount} failed.`
-    );
-  };
-
-  const handleDownloadMemories = async () => {
-    if (
-      !confirm(
-        "This will download all memories from the server and may overwrite existing local memories. Are you sure?"
-      )
-    ) {
-      return;
-    }
-
-    try {
-      const listResponse = await fetch(
-        `${backendServerUrl}/v1/memories/${unmuteConfig.voiceName}`
-      );
-      if (!listResponse.ok) {
-        alert("Failed to list memories from the server.");
-        return;
-      }
-      const memoryFilenames = await listResponse.json();
-
-      for (const filename of memoryFilenames) {
-        if (!filename.endsWith(".json")) {
-          continue;
-        }
-        try {
-          const memoryResponse = await fetch(
-            `${backendServerUrl}/v1/memories/${unmuteConfig.voiceName}/${filename}`
-          );
-          if (memoryResponse.ok) {
-            const memoryContent = await memoryResponse.json();
-            const timestamp = filename.slice(0, -5); // Remove .json
-            const memoryKey = `chatHistory_${unmuteConfig.voiceName}_memory_${timestamp}`;
-            localStorage.setItem(memoryKey, JSON.stringify(memoryContent));
-          } else {
-            console.warn(`Failed to download memory: ${filename}`);
-          }
-        } catch (e) {
-          console.warn(`Error processing memory ${filename}:`, e);
-        }
-      }
-
-      setSavedMemories(getMemoryList(unmuteConfig.voiceName));
-      alert("Memories downloaded successfully!");
-    } catch (error) {
-      console.error("Failed to download memories", error);
-      alert("Failed to download memories.");
-    }
-  };
-
-  useEffect(() => {
-    setSavedMemories(getMemoryList(unmuteConfig.voiceName));
-  }, [unmuteConfig.voiceName]);
-
-  const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const day = String(date.getDate()).padStart(2, "0");
-    const month = String(date.getMonth() + 1).padStart(2, "0"); // Month is 0-indexed
-    const year = date.getFullYear();
-    const hours = String(date.getHours()).padStart(2, "0");
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const seconds = String(date.getSeconds()).padStart(2, "0");
-    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
-  };
 
   if (!healthStatus || !backendServerUrl) {
     return (
@@ -626,66 +468,6 @@ const Unmute = () => {
               extraClasses="w-full max-w-96"
             >
               {shouldConnect ? "disconnect" : "connect"}
-            </SlantedButton>
-          </div>
-          <div className="w-full flex flex-col md:flex-row items-center justify-center gap-3">
-            <SlantedButton
-              onClick={handleSaveMemory}
-              kind="secondary"
-              extraClasses="w-full max-w-96"
-            >
-              {"save"}
-            </SlantedButton>
-            <Modal
-              className="w-full max-w-96"
-              trigger={
-                <SlantedButton kind="secondary" extraClasses="w-full">
-                  {"load"}
-                </SlantedButton>
-              }
-              forceFullscreen={true}
-              closeSignal={closeModalSignal}
-            >
-              <div className="p-4">
-                <h2 className="text-lg font-bold mb-4">Load Memory</h2>
-                {savedMemories.length === 0 ? (
-                  <p>No saved memories found.</p>
-                ) : (
-                  <ul>
-                    {savedMemories.map((memory) => (
-                      <li key={memory} className="mb-2">
-                        <button
-                          onClick={() => handleSelectMemory(memory)}
-                          className="w-full text-left p-2 bg-gray-700 hover:bg-gray-600 rounded"
-                        >
-                          {formatTimestamp(memory)}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </Modal>
-            <SlantedButton
-              onClick={handleClearMemory}
-              kind="secondary"
-              extraClasses="w-full max-w-96"
-            >
-              {"clear"}
-            </SlantedButton>
-            <SlantedButton
-              onClick={handleUploadMemories}
-              kind="secondary"
-              extraClasses="w-full max-w-96"
-            >
-              {"upload"}
-            </SlantedButton>
-            <SlantedButton
-              onClick={handleDownloadMemories}
-              kind="secondary"
-              extraClasses="w-full max-w-96"
-            >
-              {"download"}
             </SlantedButton>
           </div>
           {/* Maybe we don't need to explicitly show the status */}

@@ -53,7 +53,8 @@ def count_tools_tokens(tools: list[dict[str, Any]]) -> int:
 
     tokens = 0
     for tool in tools:
-        tokens += estimate_tokens(json.dumps(tool))
+        tool_dict = tool.model_dump() if hasattr(tool, "model_dump") else tool
+        tokens += estimate_tokens(json.dumps(tool_dict))
     return tokens
 
 
@@ -113,8 +114,9 @@ def get_relevant_tools_for_context(
     }
 
     for tool in available_tools:
-        tool_name = tool.get("function", {}).get("name", "").lower()
-        tool_desc = tool.get("function", {}).get("description", "").lower()
+        tool_dict = tool.model_dump() if hasattr(tool, "model_dump") else tool
+        tool_name = tool_dict.get("function", {}).get("name", "").lower()
+        tool_desc = tool_dict.get("function", {}).get("description", "").lower()
 
         is_relevant = False
         for keyword_category, keywords in tool_keywords.items():

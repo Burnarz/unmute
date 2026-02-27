@@ -5,6 +5,7 @@ from functools import partial
 from logging import getLogger
 from pathlib import Path
 from typing import Any, Literal, cast
+from os import getenv
 
 import numpy as np
 import websockets
@@ -67,11 +68,12 @@ TOOL_CALL_CONFIRMATION_PHRASES = [
     "Très bien, je m'en charge.",
 ]
 
-FURTHER_MESSAGES_TEMPERATURE = 1.0
+FURTHER_MESSAGES_TEMPERATURE = float(getenv("FURTHER_MESSAGES_TEMPERATURE", "1.0"))
 LLM_EXTRA_BODY = {
     "top_p": 0.95,
     "top_k": 60,
     "min_p": 0.0,
+    "think": False,
 }
 
 # FURTHER_MESSAGES_TEMPERATURE = 0.6
@@ -152,6 +154,7 @@ class UnmuteHandler(AsyncStreamHandler):
             self.audio_input_override = None
 
     async def cleanup(self):
+        await self._reload_memory()
         if self.recorder is not None:
             await self.recorder.shutdown()
 
@@ -572,12 +575,39 @@ class UnmuteHandler(AsyncStreamHandler):
     def copy(self):
         return UnmuteHandler()
 
+    async def _load_memory(self):
+        try:
+            from unmute.mcp_manager import get_mcp_manager
+
+            mcp_manager = await get_mcp_manager()
+            result = mcp_manager.get_cached_memory()
+            if not result:
+                result = await mcp_manager.load_memory()
+            if result:
+                memory_msg = {"role": "system", "content": f"Remembering: {result}"}
+                self.chatbot.chat_history.append(memory_msg)
+                logger.info("Loaded memory from cache")
+        except Exception as e:
+            logger.warning("Failed to load memory: %s", e)
+
+    async def _reload_memory(self):
+        try:
+            from unmute.mcp_manager import get_mcp_manager
+
+            mcp_manager = await get_mcp_manager()
+            await mcp_manager.load_memory()
+            logger.info("Memory reloaded on disconnect")
+        except Exception as e:
+            logger.warning("Failed to reload memory: %s", e)
+
     async def __aenter__(self) -> None:
         await self.quest_manager.__aenter__()
 
     async def start_up(self):
         await self.start_up_stt()
         self.waiting_for_user_start_time = self.audio_received_sec()
+
+        await self._load_memory()
 
     async def __aexit__(self, *exc: Any) -> None:
         return await self.quest_manager.__aexit__(*exc)

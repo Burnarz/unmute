@@ -73,10 +73,13 @@ async def startup_event():
     """Pre-initialize MCP manager at server startup."""
     try:
         from unmute.mcp_manager import get_mcp_manager
+
         logger.info("Pre-initializing MCP manager...")
         manager = await get_mcp_manager()
         tool_count = len(manager.get_all_tools())
         logger.info("MCP manager initialized with %d tools", tool_count)
+        await manager.load_memory()
+        logger.info("Memory pre-loaded at startup")
     except Exception as e:
         logger.warning("Failed to pre-initialize MCP manager: %s", e)
 
@@ -98,7 +101,7 @@ ClientEventAdapter = TypeAdapter(
 # Allow CORS for local development
 CORS_ALLOW_ORIGINS = ["http://localhost", "http://localhost:3000"]
 if "HTTP_HOST" in os.environ:
-    CORS_ALLOW_ORIGINS.append(f'https://{os.environ["HTTP_HOST"]}:3000')
+    CORS_ALLOW_ORIGINS.append(f"https://{os.environ['HTTP_HOST']}:3000")
 
 app.add_middleware(
     CORSMiddleware,
@@ -383,6 +386,20 @@ async def proxy_news_sources(request: Request):
     )
     return JSONResponse(content=response.json())
 
+@app.get("/v1/proxy/jokes")
+async def proxy_jokes(request: Request):
+    jokes_api_key = os.environ.get("BLAGUES_API_KEY")
+    if not jokes_api_key:
+        raise HTTPException(status_code=500, detail="BLAGUES_API_KEY is not set")
+
+    params = request.query_params
+    response = requests.get(
+        "https://www.blagues-api.fr/api/random",
+        params=params,
+        headers={"Authorization": f"Bearer {jokes_api_key}"},
+    )
+    return JSONResponse(content=response.json())
+
 
 class HomeAssistantRequest(BaseModel):
     text: str
@@ -392,12 +409,17 @@ class HomeAssistantRequest(BaseModel):
 async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
     ha_url = os.environ.get("HOME_ASSISTANT_URL")
     ha_token = os.environ.get("HOME_ASSISTANT_TOKEN")
-    
+
     if not ha_url:
-        raise HTTPException(status_code=500, detail="HOME_ASSISTANT_URL environment variable is not set")
+        raise HTTPException(
+            status_code=500, detail="HOME_ASSISTANT_URL environment variable is not set"
+        )
     if not ha_token:
-        raise HTTPException(status_code=500, detail="HOME_ASSISTANT_TOKEN environment variable is not set")
-    
+        raise HTTPException(
+            status_code=500,
+            detail="HOME_ASSISTANT_TOKEN environment variable is not set",
+        )
+
     try:
         response = requests.post(
             f"{ha_url}/api/conversation/process",
@@ -412,16 +434,21 @@ async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
             },
             timeout=10,
         )
-        
+
         if response.status_code != 200:
             return JSONResponse(
-                content={"error": f"Home Assistant returned status {response.status_code}: {response.text}"},
-                status_code=response.status_code
+                content={
+                    "error": f"Home Assistant returned status {response.status_code}: {response.text}"
+                },
+                status_code=response.status_code,
             )
-        
+
         data = response.json()
         return {
-            "response": data.get("response", {}).get("speech", {}).get("plain", {}).get("speech", "Command sent"),
+            "response": data.get("response", {})
+            .get("speech", {})
+            .get("plain", {})
+            .get("speech", "Command sent"),
             "success": True,
         }
     except requests.exceptions.ConnectionError:
@@ -441,7 +468,7 @@ class MCPToolCallRequest(BaseModel):
 async def get_mcp_tools():
     """Get all available MCP tools in OpenAI function calling format."""
     from unmute.mcp_manager import get_mcp_manager
-    
+
     try:
         manager = await get_mcp_manager()
         tools = manager.get_tools_for_llm()
@@ -455,19 +482,18 @@ async def get_mcp_tools():
 async def call_mcp_tool(request: MCPToolCallRequest):
     """Call an MCP tool by name."""
     from unmute.mcp_manager import get_mcp_manager
-    
+
     try:
         manager = await get_mcp_manager()
-        
+
         if not manager.is_tool_from_mcp(request.name):
             raise HTTPException(
-                status_code=400,
-                detail=f"Tool '{request.name}' is not an MCP tool"
+                status_code=400, detail=f"Tool '{request.name}' is not an MCP tool"
             )
-        
+
         result = await manager.call_tool(request.name, request.arguments)
         return {"success": True, "result": result}
-    
+
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -479,17 +505,19 @@ async def call_mcp_tool(request: MCPToolCallRequest):
 async def get_mcp_status():
     """Get the status of all MCP server connections."""
     from unmute.mcp_manager import get_mcp_manager
-    
+
     try:
         manager = await get_mcp_manager()
         servers = []
         for name, connection in manager.servers.items():
-            servers.append({
-                "name": name,
-                "connected": connection.session is not None,
-                "tool_count": len(connection.tools),
-                "tools": [t.name for t in connection.tools],
-            })
+            servers.append(
+                {
+                    "name": name,
+                    "connected": connection.session is not None,
+                    "tool_count": len(connection.tools),
+                    "tools": [t.name for t in connection.tools],
+                }
+            )
         return {
             "initialized": manager._initialized,
             "server_count": len(manager.servers),

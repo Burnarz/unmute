@@ -67,15 +67,15 @@ class MCPServerConnection:
             )
 
             self._exit_stack = AsyncExitStack()
-            
+
             read_stream, write_stream = await self._exit_stack.enter_async_context(
                 stdio_client(server_params)
             )
-            
+
             self.session = await self._exit_stack.enter_async_context(
                 ClientSession(read_stream, write_stream)
             )
-            
+
             # Initialize the session before using it
             await self.session.initialize()
 
@@ -100,7 +100,9 @@ class MCPServerConnection:
             return True
 
         except Exception as e:
-            logger.error("Failed to connect to MCP server '%s': %s", self.config.name, e)
+            logger.error(
+                "Failed to connect to MCP server '%s': %s", self.config.name, e
+            )
             await self.disconnect()
             return False
 
@@ -110,7 +112,9 @@ class MCPServerConnection:
             try:
                 await self._exit_stack.aclose()
             except Exception as e:
-                logger.warning("Error disconnecting from MCP server '%s': %s", self.config.name, e)
+                logger.warning(
+                    "Error disconnecting from MCP server '%s': %s", self.config.name, e
+                )
             finally:
                 self._exit_stack = None
                 self.session = None
@@ -123,18 +127,16 @@ class MCPServerConnection:
 
         try:
             result = await self.session.call_tool(tool_name, arguments)
-            
+
             # Extract content from result
             if result.content:
                 # Handle different content types
-                text_contents = [
-                    c.text for c in result.content if hasattr(c, "text")
-                ]
+                text_contents = [c.text for c in result.content if hasattr(c, "text")]
                 if text_contents:
                     if len(text_contents) == 1:
                         return text_contents[0]
                     return text_contents
-            
+
             return result.model_dump()
 
         except Exception as e:
@@ -160,6 +162,7 @@ class MCPManager:
     def __init__(self) -> None:
         self.servers: dict[str, MCPServerConnection] = {}
         self._initialized = False
+        self._memory_cache: str | None = None
 
     @classmethod
     async def get_instance(cls) -> "MCPManager":
@@ -174,18 +177,18 @@ class MCPManager:
 
     def _load_server_configs(self) -> list[MCPServerConfig]:
         """Load MCP server configurations from environment variables.
-        
+
         Supports dynamic discovery of MCP servers via pattern:
         - MCP_<NAME>_COMMAND: Command to run the server
         - MCP_<NAME>_ARGS: JSON array of arguments (optional)
-        
+
         Example:
             MCP_FILE_SERVER_COMMAND=npx
             MCP_FILE_SERVER_ARGS=["@modelcontextprotocol/server-filesystem","/path"]
         """
         configs = []
         discovered_servers: set[str] = set()
-        
+
         # Scan environment variables for MCP_<name>_COMMAND pattern
         for key, value in os.environ.items():
             if key.startswith("MCP_") and key.endswith("_COMMAND"):
@@ -193,48 +196,68 @@ class MCPManager:
                 name = key[4:-8].lower()  # Remove "MCP_" prefix and "_COMMAND" suffix
                 if name and value:
                     discovered_servers.add(name)
-        
+
         # Also check for MCP_SERVERS JSON config
         servers_json = os.environ.get("MCP_SERVERS")
         if servers_json:
             try:
                 servers_config = json.loads(servers_json)
                 for name, config in servers_config.items():
-                    configs.append(MCPServerConfig(
-                        name=name.lower(),
-                        command=config.get("command", ""),
-                        args=config.get("args", []),
-                        env=config.get("env"),
-                    ))
+                    configs.append(
+                        MCPServerConfig(
+                            name=name.lower(),
+                            command=config.get("command", ""),
+                            args=config.get("args", []),
+                            env=config.get("env"),
+                        )
+                    )
             except json.JSONDecodeError:
                 logger.warning("Failed to parse MCP_SERVERS JSON")
-        
+
         # Create configs for discovered servers
         for name in discovered_servers:
             command = os.environ.get(f"MCP_{name.upper()}_COMMAND")
             if not command:
                 continue
-            
+
             args_str = os.environ.get(f"MCP_{name.upper()}_ARGS", "[]")
             try:
                 args = json.loads(args_str)
             except json.JSONDecodeError:
                 args = []
-                logger.warning("Failed to parse MCP_%s_ARGS, using empty list", name.upper())
-            
-            configs.append(MCPServerConfig(
-                name=name,
-                command=command,
-                args=args,
-            ))
-        
-        logger.info("Discovered %d MCP server config(s): %s", len(configs), [c.name for c in configs])
+                logger.warning(
+                    "Failed to parse MCP_%s_ARGS, using empty list", name.upper()
+                )
+
+            env_str = os.environ.get(f"MCP_{name.upper()}_ENV", "{}")
+            try:
+                env = json.loads(env_str)
+            except json.JSONDecodeError:
+                env = {}
+                logger.warning(
+                    "Failed to parse MCP_%s_ENV, using empty dict", name.upper()
+                )
+
+            configs.append(
+                MCPServerConfig(
+                    name=name,
+                    command=command,
+                    args=args,
+                    env=env if env else None,
+                )
+            )
+
+        logger.info(
+            "Discovered %d MCP server config(s): %s",
+            len(configs),
+            [c.name for c in configs],
+        )
         return configs
 
     async def initialize(self) -> None:
         """Initialize connections to all configured MCP servers."""
         configs = self._load_server_configs()
-        
+
         if not configs:
             logger.info("No MCP servers configured")
             return
@@ -260,6 +283,25 @@ class MCPManager:
             await connection.disconnect()
         self.servers.clear()
         self._initialized = False
+        self._memory_cache = None
+
+    async def load_memory(self) -> str | None:
+        """Load memory from MCP memory server and cache it."""
+        if "memory_server" not in self.servers:
+            return None
+
+        try:
+            result = await self.call_tool("read_graph", {})
+            self._memory_cache = result
+            logger.info("Memory loaded and cached")
+            return result
+        except Exception as e:
+            logger.warning("Failed to load memory: %s", e)
+            return self._memory_cache
+
+    def get_cached_memory(self) -> str | None:
+        """Get cached memory without calling the server."""
+        return self._memory_cache
 
     def get_all_tools(self) -> list[MCPTool]:
         """Get all tools from all connected MCP servers."""
@@ -272,14 +314,16 @@ class MCPManager:
         """Get tools in OpenAI function calling format."""
         tools = []
         for mcp_tool in self.get_all_tools():
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": mcp_tool.name,
-                    "description": mcp_tool.description,
-                    "parameters": mcp_tool.input_schema,
-                },
-            })
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": mcp_tool.name,
+                        "description": mcp_tool.description,
+                        "parameters": mcp_tool.input_schema,
+                    },
+                }
+            )
         return tools
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
@@ -294,7 +338,7 @@ class MCPManager:
                         arguments,
                     )
                     return await connection.call_tool(tool_name, arguments)
-        
+
         raise ValueError(f"Tool '{tool_name}' not found in any connected MCP server")
 
     def is_tool_from_mcp(self, tool_name: str) -> bool:

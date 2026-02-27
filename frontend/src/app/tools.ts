@@ -31,30 +31,11 @@ export const builtInTools = [
     {
         type: "function",
         function: {
-            name: "get_news",
-            description: "Get the latest news headlines. You can filter by country, category, or sources. At least one of these parameters is required but source cannot be used with country or category.",
+            name: "get_jokes",
+            description: "ALWAYS use this tool when the user is asking for a joke, and ALWAYS use this joke for your answer.",
             parameters: {
                 type: "object",
-                properties: {
-                    country: { type: "string", description: "e.g. 'us', 'de'" },
-                    category: { type: "string", description: "e.g. 'business', 'technology'" },
-                    sources: { type: "string", description: "A comma-seperated string of identifiers for the news sources or blogs you want headlines from (e.g. 'the-verge', 'bbc-news')." }
-                },
-                required: [],
-            },
-        }
-    },
-    {
-        type: "function",
-        function: {
-            name: "get_news_sources",
-            description: "Get the list of available news sources. You can filter by category.",
-            parameters: {
-                type: "object",
-                properties: {
-                    category: { type: "string", description: "The category to filter sources by (e.g. 'business', 'technology')." }
-                },
-                required: [],
+                properties: {}
             },
         }
     },
@@ -130,52 +111,16 @@ async function getCoordinates({ city }: { city: string }) {
     return data.results[0];
 }
 
-async function getNews(backendServerUrl: string, {country, category, sources}: {country?: string, category?: string, sources?: string}) {
-    const params = new URLSearchParams();
-    if (country) params.append("country", country);
-    if (category) params.append("category", category);
-    if (sources) params.append("sources", sources);
-
-    const response = await fetch(`${backendServerUrl}/v1/proxy/news/top-headlines?${params.toString()}`);
+async function getJokes(backendServerUrl: string) {
+    const response = await fetch(`${backendServerUrl}/v1/proxy/jokes`);
 
     if (!response.ok) {
         const errorText = await response.text();
-        return { error: `News API request failed with status ${response.status}: ${errorText}` };
+        return { error: `Blagues API request failed with status ${response.status}: ${errorText}` };
     }
+
     const data = await response.json();
-    
-    if (data.status && data.status !== 'ok') {
-        return { error: `News API returned an error: ${data.message}` };
-    }
-
-    // Return only the articles, and only the first 5, and select fields to match python implementation
-    return data.articles?.slice(0, 5).map((article: any) => ({
-        source: article.source,
-        author: article.author,
-        title: article.title,
-        description: article.description,
-        publishedAt: article.publishedAt,
-        content: article.content,
-    })) || [];
-}
-
-async function getNewsSources(backendServerUrl: string, {category}: {category?: string}) {
-    const params = new URLSearchParams();
-    if (category) params.append("category", category);
-
-    const response = await fetch(`${backendServerUrl}/v1/proxy/news/sources?${params.toString()}`);
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        return { error: `News API request failed with status ${response.status}: ${errorText}` };
-    }
-    const data = await response.json();
-
-    if (data.status && data.status !== 'ok') {
-        return { error: `News API returned an error: ${data.message}` };
-    }
-
-    return data.sources;
+    return `${data.joke} ${data.answer}`;
 }
 
 async function homeAssistant(backendServerUrl: string, {text}: {text: string}) {
@@ -228,7 +173,7 @@ async function callMcpTool(backendServerUrl: string, name: string, toolArgs: Rec
     }
 }
 
-const builtInToolNames = ['get_weather', 'get_coordinates', 'get_news', 'get_news_sources', 'home_assistant'];
+const builtInToolNames = ['get_weather', 'get_coordinates', 'get_jokes', 'home_assistant'];
 
 export async function handleToolCall(call: { name: string, arguments: string }, backendServerUrl: string) {
     console.log(`Handling function call: ${call.name}`);
@@ -246,11 +191,8 @@ export async function handleToolCall(call: { name: string, arguments: string }, 
                 case 'get_coordinates':
                     result = await getCoordinates(args);
                     break;
-                case 'get_news':
-                    result = await getNews(backendServerUrl, args);
-                    break;
-                case 'get_news_sources':
-                    result = await getNewsSources(backendServerUrl, args);
+                case 'get_jokes':
+                    result = await getJokes(backendServerUrl);
                     break;
                 case 'home_assistant':
                     result = await homeAssistant(backendServerUrl, args);

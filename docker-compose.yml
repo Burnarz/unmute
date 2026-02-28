@@ -31,36 +31,40 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
       - "traefik.http.routers.frontend.priority=10"
   
+  mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    volumes:
+      - ${JARVIS_SHARE_PATH}:/app/partage
+      - ${GOOGLE_TOKENS_PATH}:/app/GoogleTokens
+      - ${MEMORY_FOLDER}:/app/memory
+    environment:
+      - MCP_BRAVE_BRAVE_API_KEY=${BRAVE_API_KEY}	# Format MCP_SERVER-NAME_ENV-KEY
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  
   backend:
     image: unmute-backend:latest
     build:
       context: ./
       target: hot-reloading
+    network_mode: service:mcp
+    depends_on:
+      mcp:
+        condition: service_started
     volumes:
       - ./unmute:/app/unmute
-      - ${JARVIS_SHARE_PATH}:/app/partage
-      - ${GOOGLE_TOKENS_PATH}:/app/GoogleTokens
-      - ${MEMORY_FOLDER}:/app/memory
     environment:
+      - MCP_HTTP_URL=http://127.0.0.1:3001
       - KYUTAI_STT_URL=ws://stt:8080
       - KYUTAI_TTS_URL=ws://tts:8080
       - KYUTAI_LLM_URL=${LLM_URL}
       - KYUTAI_LLM_MODEL=${LLM_MODEL}
       - KYUTAI_LLM_API_KEY=ollama
-      - THINKING=${THINKING}
       - NEWSAPI_API_KEY=${NEWSAPI_API_KEY}
       - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}
       - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
-      - MCP_FILE_SERVER_COMMAND=${MCP_FILE_SERVER_COMMAND}
-      - MCP_FILE_SERVER_ARGS=${MCP_FILE_SERVER_ARGS}
-      - MCP_GSUITE_SERVER_COMMAND=${MCP_GSUITE_SERVER_COMMAND}
-      - MCP_GSUITE_SERVER_ARGS=${MCP_GSUITE_SERVER_ARGS}
-      - MCP_MEMORY_SERVER_COMMAND=${MCP_MEMORY_SERVER_COMMAND}
-      - MCP_MEMORY_SERVER_ARGS=${MCP_MEMORY_SERVER_ARGS}
-      - MCP_MEMORY_SERVER_ENV=${MCP_MEMORY_SERVER_ENV}
-      - MCP_BRAVE_COMMAND=${MCP_BRAVE_COMMAND}
-      - MCP_BRAVE_ARGS=${MCP_BRAVE_ARGS}
-      - MCP_BRAVE_ENV=${MCP_BRAVE_ENV}
       - BLAGUES_API_KEY=${BLAGUES_API_KEY}
       - FURTHER_MESSAGES_TEMPERATURE=${FURTHER_MESSAGES_TEMPERATURE}
     labels:
@@ -74,9 +78,7 @@ services:
       - "traefik.http.services.backend.loadbalancer.server.port=80"
       - "traefik.http.routers.backend.priority=100"
       - "prometheus-port=80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-  
+   
   tts:
     image: moshi-server:latest
     command: ["worker", "--config", "configs/tts.toml"]

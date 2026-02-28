@@ -1,0 +1,37 @@
+{
+  "servers": [
+    {
+      "name": "file_server",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/app/partage"],
+      "env": {},
+      "cwd": "/app"
+    },
+    {
+      "name": "gsuite",
+      "command": "uv",
+      "args": ["mcp-gsuite", "--credentials-dir", "credentials"],
+      "env": {
+        "GAUTH_FILE": ".gauth.json",
+        "ACCOUNTS_FILE": ".accounts.json"
+      },
+      "cwd": "/app/GoogleTokens"
+    },
+    {
+      "name": "brave",
+      "command": "npx",
+      "args": ["@brave/brave-search-mcp-server"],
+      "env": {},
+      "cwd": "/app"
+    },
+    {
+      "name": "memory",
+      "command": "node",
+      "args": ["/app/node_modules/@modelcontextprotocol/server-memory/dist/index.js"],
+      "env": {
+        "MEMORY_FILE_PATH": "/app/memory/memory.jsonl"
+      },
+      "cwd": "/app"
+    }
+  ]
+}

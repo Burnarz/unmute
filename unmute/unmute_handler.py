@@ -58,7 +58,7 @@ AUDIO_INPUT_OVERRIDE: Path | None = None
 DEBUG_PLOT_HISTORY_SEC = 10.0
 
 USER_SILENCE_TIMEOUT = 7.0
-FIRST_MESSAGE_TEMPERATURE = 1.0
+FIRST_MESSAGE_TEMPERATURE = float(getenv("FURTHER_MESSAGES_TEMPERATURE", "1.0")) + 0.5
 
 TOOL_CALL_CONFIRMATION_PHRASES = [
     "Je m'en occupe tout de suite.",
@@ -69,12 +69,13 @@ TOOL_CALL_CONFIRMATION_PHRASES = [
 ]
 
 FURTHER_MESSAGES_TEMPERATURE = float(getenv("FURTHER_MESSAGES_TEMPERATURE", "1.0"))
-LLM_EXTRA_BODY = {
-    "top_p": 0.95,
-    "top_k": 60,
-    "min_p": 0.0,
-    "think": False,
-}
+LLM_EXTRA_BODY = {}
+# LLM_EXTRA_BODY = {
+#     "top_p": 0.95,
+#     "top_k": 60,
+#     "min_p": 0.0,
+#     "think": False,
+# }
 
 # FURTHER_MESSAGES_TEMPERATURE = 0.6
 # LLM_EXTRA_BODY = {

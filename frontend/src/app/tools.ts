@@ -32,7 +32,7 @@ export const builtInTools = [
         type: "function",
         function: {
             name: "get_jokes",
-            description: "ALWAYS use this tool when the user is asking for a joke, and ALWAYS use this joke for your answer.",
+            description: "ALWAYS use this tool when the user is asking for a joke, and ALWAYS respond with this joke.",
             parameters: {
                 type: "object",
                 properties: {}

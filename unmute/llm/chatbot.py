@@ -112,9 +112,9 @@ class Chatbot:
 
             messages = [
                 self.chat_history[0],
-                # Some models, like Gemma, don't like it when there is no user message
-                # so we add one.
-                {"role": "user", "content": "Hello!"},
+            #     # Some models, like Gemma, don't like it when there is no user message
+            #     # so we add one.
+            #     {"role": "user", "content": "Hello!"},
             ]
 
         messages = preprocess_messages_for_llm(messages)

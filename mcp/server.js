@@ -83,12 +83,8 @@ function applyEnvOverrides(config) {
 function extractPackageName(command, args) {
   if (!args || args.length === 0) return null;
 
-  if (command === 'npx' || command === 'npm') {
-    return args[0];
-  }
-
-  if (command === 'uvx') {
-    return args[0];
+  if (command === 'npx' || command === 'npm' || command === 'uvx') {
+    return null;
   }
 
   if (command === 'node') {
@@ -139,25 +135,49 @@ async function syncDependencies() {
 
   const missingPackages = [...requiredPackages].filter(p => !currentDeps.has(p));
 
-  if (missingPackages.length === 0) {
+  const protectedPackages = new Set([
+    'express', 'cors', 'body-parser'
+  ]);
+
+  const packagesToRemove = [...currentDeps].filter(p =>
+    !requiredPackages.has(p) && !protectedPackages.has(p)
+  );
+
+  let needsNpmInstall = false;
+
+  if (missingPackages.length > 0) {
+    console.log(`Adding missing dependencies: ${missingPackages.join(', ')}`);
+
+    for (const pkg of missingPackages) {
+      packageJson.dependencies[pkg] = 'latest';
+    }
+    needsNpmInstall = true;
+  }
+
+  if (packagesToRemove.length > 0) {
+    console.log(`Removing unused dependencies: ${packagesToRemove.join(', ')}`);
+
+    for (const pkg of packagesToRemove) {
+      delete packageJson.dependencies[pkg];
+    }
+    needsNpmInstall = true;
+  }
+
+  if (missingPackages.length === 0 && packagesToRemove.length === 0) {
     console.log('All dependencies already in package.json');
     return;
   }
 
-  console.log(`Adding missing dependencies: ${missingPackages.join(', ')}`);
-
-  for (const pkg of missingPackages) {
-    packageJson.dependencies[pkg] = 'latest';
-  }
-
   fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
 
-  console.log('Running npm install...');
-  try {
-    execSync('npm install', { cwd: __dirname, stdio: 'inherit' });
-    console.log('Dependencies installed successfully');
-  } catch (err) {
-    console.error(`npm install failed: ${err.message}`);
+  if (needsNpmInstall) {
+    console.log('Running npm install...');
+    try {
+      execSync('npm install', { cwd: __dirname, stdio: 'inherit' });
+      console.log('Dependencies installed successfully');
+    } catch (err) {
+      console.error(`npm install failed: ${err.message}`);
+    }
   }
 }
 

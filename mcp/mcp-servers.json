@@ -9,7 +9,7 @@
     },
     {
       "name": "gsuite",
-      "command": "uv",
+      "command": "uvx",
       "args": ["mcp-gsuite", "--credentials-dir", "credentials"],
       "env": {
         "GAUTH_FILE": ".gauth.json",

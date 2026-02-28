@@ -67,6 +67,8 @@ services:
       - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
       - BLAGUES_API_KEY=${BLAGUES_API_KEY}
       - FURTHER_MESSAGES_TEMPERATURE=${FURTHER_MESSAGES_TEMPERATURE}
+      - MAX_CONTEXT_TOKENS=${MAX_CONTEXT_TOKENS}
+      - MAX_TOOLS_TOKENS=${MAX_TOOLS_TOKENS}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"

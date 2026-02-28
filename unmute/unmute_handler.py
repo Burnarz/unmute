@@ -85,14 +85,6 @@ LLM_EXTRA_BODY = {}
 #     "chat_template_kwargs": {"enable_thinking": True},
 # }
 
-# FURTHER_MESSAGES_TEMPERATURE = 0.7
-# LLM_EXTRA_BODY = {
-#     'top_p': 0.8,
-#     'top_k': 20,
-#     'min_p': 0.0,
-#     "chat_template_kwargs": {"enable_thinking": False},
-# }
-
 # For this much time, the VAD does not interrupt the bot. This is needed because at
 # least on Mac, the echo cancellation takes a while to kick in, at the start, so the ASR
 # sometimes hears a bit of the TTS audio and interrupts the bot. Only happens on the
@@ -343,9 +335,9 @@ class UnmuteHandler(AsyncStreamHandler):
                                     raise
 
                                 await tts.send(tool_call_confirmation)
-                                await self.output_queue.put(
-                                    ora.ResponseTextDelta(delta=tool_call_confirmation)
-                                )
+                                # await self.output_queue.put(
+                                #     ora.ResponseTextDelta(delta=tool_call_confirmation)
+                                # )
                                 await tts.send(TTSClientEosMessage())
 
                                 try:

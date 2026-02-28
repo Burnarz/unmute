@@ -14,6 +14,9 @@ ENV PATH="/root/.local/bin:$PATH"
 
 COPY package.json ./
 RUN pnpm install --frozen-lockfile || pnpm install
+RUN uvx --from mcp-gsuite mcp-gsuite --help || true
+RUN find /root/.cache/uv -name "tools_gmail.py" -path "*/mcp_gsuite/*" \
+    -exec sed -i '45{/"required": False/d}' {} \;
 
 COPY server.js ./
 COPY mcp-servers.json ./

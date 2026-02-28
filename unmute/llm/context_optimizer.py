@@ -182,9 +182,23 @@ def truncate_context_to_token_limit(
     current_tokens = 0
     truncated_messages = []
 
+    # Garde toujours la dernière interaction (dernier user + dernier assistant)
+    last_interaction = []
     for msg in reversed(non_system_messages):
-        msg_tokens = estimate_message_tokens(msg)
+        if msg.get("role") in ("user", "assistant") and len(last_interaction) < 2:
+            last_interaction.insert(0, msg)
+        else:
+            break
 
+    last_interaction_tokens = sum(estimate_message_tokens(m) for m in last_interaction)
+
+    for msg in reversed(non_system_messages):
+        if msg in last_interaction:
+            truncated_messages.insert(0, msg)
+            current_tokens += estimate_message_tokens(msg)
+            continue
+
+        msg_tokens = estimate_message_tokens(msg)
         if current_tokens + msg_tokens <= max_history_tokens:
             truncated_messages.insert(0, msg)
             current_tokens += msg_tokens

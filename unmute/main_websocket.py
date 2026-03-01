@@ -357,35 +357,6 @@ async def post_memory(voice_name: str, file: UploadFile = File(...)):
     return {"filename": filename}
 
 
-@app.get("/v1/proxy/news/top-headlines")
-async def proxy_news_top_headlines(request: Request):
-    newsapi_api_key = os.environ.get("NEWSAPI_API_KEY")
-    if not newsapi_api_key:
-        raise HTTPException(status_code=500, detail="NEWSAPI_API_KEY is not set")
-
-    params = request.query_params
-    response = requests.get(
-        "https://newsapi.org/v2/top-headlines",
-        params=params,
-        headers={"Authorization": newsapi_api_key},
-    )
-    return JSONResponse(content=response.json())
-
-
-@app.get("/v1/proxy/news/sources")
-async def proxy_news_sources(request: Request):
-    newsapi_api_key = os.environ.get("NEWSAPI_API_KEY")
-    if not newsapi_api_key:
-        raise HTTPException(status_code=500, detail="NEWSAPI_API_KEY is not set")
-
-    params = request.query_params
-    response = requests.get(
-        "https://newsapi.org/v2/top-headlines/sources",
-        params=params,
-        headers={"Authorization": newsapi_api_key},
-    )
-    return JSONResponse(content=response.json())
-
 @app.get("/v1/proxy/jokes")
 async def proxy_jokes(request: Request):
     jokes_api_key = os.environ.get("BLAGUES_API_KEY")

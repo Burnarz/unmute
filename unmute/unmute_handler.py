@@ -335,9 +335,7 @@ class UnmuteHandler(AsyncStreamHandler):
                                     raise
 
                                 await tts.send(tool_call_confirmation)
-                                # await self.output_queue.put(
-                                #     ora.ResponseTextDelta(delta=tool_call_confirmation)
-                                # )
+
                                 await tts.send(TTSClientEosMessage())
 
                                 try:

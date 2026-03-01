@@ -12,39 +12,6 @@ const frankRuhlLibre = Frank_Ruhl_Libre({
 const ShortExplanation = () => {
   return (
     <>
-      <p className="text-xs text-right">
-        Speak to an AI using our low-latency open-source{" "}
-        <Link
-          href="https://kyutai.org/stt"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          speech-to-text
-        </Link>{" "}
-        and{" "}
-        <Link
-          href="https://kyutai.org/tts"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          text-to-speech
-        </Link>
-        .
-      </p>
-      <p className="text-xs text-right">
-        Also check out{" "}
-        <Link
-          href="https://kyutai.org/pocket-tts?ref=unmute"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          Pocket TTS
-        </Link>
-        , our new tiny TTS model with voice cloning!
-      </p>
     </>
   );
 };

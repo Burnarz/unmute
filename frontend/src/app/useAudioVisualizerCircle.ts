@@ -11,9 +11,10 @@ const SCALE_DISCONNECTED = 0.8;
 const ANIMATION_DURATION = 500; // milliseconds
 
 const INTERRUPTION_CHAR = "—"; // em-dash
+let lastResetTime = 0;
 
 const sampleToNormalizedRadius = (x: number) => {
-  return 0.8 + 0.2 * Math.tanh(x * 2);
+  return 0.6 + 0.2 * Math.tanh(x * 2);
 };
 
 interface Positioning {
@@ -31,29 +32,32 @@ const drawCircleVisualization = (
   animationProgress: number,
   positioning: Positioning
 ) => {
-  // Calculate scale factor from animation progress (0 = disconnected, 1 = connected)
   const scaleFactor =
     SCALE_DISCONNECTED +
     (SCALE_CONNECTED - SCALE_DISCONNECTED) * animationProgress;
 
-  canvasCtx.beginPath();
+  const now = Date.now();
+  if (now - lastResetTime >= 500) {
+    canvas.width = canvas.width; // reset natif
+    lastResetTime = now;
+  }
+
   for (let i = 0; i < data.length; i++) {
     const radius =
       positioning.radius * sampleToNormalizedRadius(data[i]) * scaleFactor;
-    const angle = (i / data.length) * Math.PI * 2;
 
-    const x = positioning.centerX + radius * Math.cos(angle);
-    const y = positioning.centerY + radius * Math.sin(angle);
-    if (i === 0) {
-      canvasCtx.moveTo(x, y);
-    } else {
-      canvasCtx.lineTo(x, y);
-    }
+    canvasCtx.beginPath();
+    canvasCtx.arc(
+      positioning.centerX,
+      positioning.centerY,
+      radius,
+      0,
+      Math.PI * 2
+    );
+    canvasCtx.strokeStyle = getCSSVariable(colorName);
+    canvasCtx.lineWidth = lineWidth;
+    canvasCtx.stroke();
   }
-  canvasCtx.closePath();
-  canvasCtx.strokeStyle = getCSSVariable(colorName);
-  canvasCtx.lineWidth = lineWidth;
-  canvasCtx.stroke();
 };
 
 // New function to draw a play triangle

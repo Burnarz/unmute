@@ -89,28 +89,27 @@ def get_relevant_tools_for_context(
 
     tool_keywords = {
         "calendar": [
-            "calendar",
-            "meeting",
-            "schedule",
-            "event",
-            "rdv",
-            "réunion",
-            "disponibil",
+            "rdv", "réunion", "agenda", "disponibil", "rendez-vous",
+            "rappel", "créneau", "semaine", "journée", "planifier",
         ],
-        "gmail": ["email", "mail", "gmail", "message", "envoyer", "read", "inbox"],
+        "gmail": [
+            "email", "mail", "message", "envoyer",
+            "lire", "répondre", "brouillon", "pièce jointe",
+            "destinataire", "objet", "courriel", "reçu",
+        ],
         "file": [
-            "file",
-            "folder",
-            "directory",
-            "read",
-            "write",
-            "create",
-            "delete",
-            "fichier",
-            "dossier",
+            "fichier", "dossier", "répertoire", "lire", "écrire", "modifier",
+            "supprimer", "déplacer", "renommer", "arborescence", "chemin",
         ],
-        "fetch": ["fetch", "web", "url", "http", "download", "récupérer", "site"],
-        "search": ["search", "google", "查找", "搜索"],
+        "search": [
+            "chercher", "rechercher", "trouver",
+            "actualité", "vidéo", "image", "résultat",
+            "résumé", "lieu", "adresse",
+        ],
+        "memory": [
+            "souviens", "mémorise", "retiens", "note", "rappelle",
+            "connaissance", "entité", "relation", "graphe", "mémoire",
+        ],
     }
 
     for tool in available_tools:

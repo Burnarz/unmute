@@ -3,7 +3,6 @@ import useWebSocket, { ReadyState } from "react-use-websocket";
 import { useCallback, useEffect, useState } from "react";
 import { useMicrophoneAccess } from "./useMicrophoneAccess";
 import { base64DecodeOpus, base64EncodeOpus } from "./audioUtil";
-import SlantedButton from "@/app/SlantedButton";
 import { useAudioProcessor as useAudioProcessor } from "./useAudioProcessor";
 import useKeyboardShortcuts from "./useKeyboardShortcuts";
 import { prettyPrintJson } from "pretty-print-json";
@@ -433,14 +432,14 @@ const Unmute = () => {
           )}
         >
           <PositionedAudioVisualizer
-            chatHistory={displayChatHistory}
+            chatHistory={chatHistory}
             role={"assistant"}
             analyserNode={audioProcessor.current?.outputAnalyser || null}
             onCircleClick={onConnectButtonPress}
             isConnected={shouldConnect}
           />
           <PositionedAudioVisualizer
-            chatHistory={displayChatHistory}
+            chatHistory={chatHistory}
             role={"user"}
             analyserNode={audioProcessor.current?.inputAnalyser || null}
             isConnected={shouldConnect}
@@ -453,32 +452,7 @@ const Unmute = () => {
           setConfig={setUnmuteConfig}
           voiceCloningUp={healthStatus.voice_cloning_up || false}
         />
-        <div className="w-full flex flex-col items-center justify-center px-3 gap-3 my-6">
-          <div className="w-full flex flex-col md:flex-row items-center justify-center gap-3">
-            <SlantedButton
-              onClick={onDownloadRecordingButtonPress}
-              kind={recordingAvailable ? "secondary" : "disabled"}
-              extraClasses="w-full max-w-96"
-            >
-              {"download recording"}
-            </SlantedButton>
-            <SlantedButton
-              onClick={onConnectButtonPress}
-              kind={shouldConnect ? "secondary" : "primary"}
-              extraClasses="w-full max-w-96"
-            >
-              {shouldConnect ? "disconnect" : "connect"}
-            </SlantedButton>
-          </div>
-          {/* Maybe we don't need to explicitly show the status */}
-          {/* {renderConnectionStatus(readyState, false)} */}
-          {microphoneAccess === "refused" && (
-            <div className="text-red">
-              {"You'll need to allow microphone access to use the demo. " +
-                "Please check your browser settings."}
-            </div>
-          )}
-        </div>
+
       </div>
       {/* Debug stuff, not counted into the screen height */}
       {isDevMode && (

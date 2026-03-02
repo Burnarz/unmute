@@ -228,12 +228,12 @@ class UnmuteHandler(AsyncStreamHandler):
         llm_stopwatch = Stopwatch()
 
         quest = await self.start_up_tts(generating_message_i)
+        # Used to debug first message temperature
+        logger.info("generating_message_i: %s", generating_message_i)
         llm = VLLMStream(
-            # if generating_message_i is 2, then we have a system prompt + an empty
-            # assistant message signalling that we are generating a response.
             self.openai_client,
             temperature=FIRST_MESSAGE_TEMPERATURE
-            if generating_message_i == 2
+            if generating_message_i == 4
             else FURTHER_MESSAGES_TEMPERATURE,
             extra_body=LLM_EXTRA_BODY,
         )

@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from copy import deepcopy
 from functools import cache
 from typing import Any, AsyncIterator, Protocol, cast
@@ -14,6 +15,8 @@ from openai.types.chat.chat_completion_message_tool_call import (
 from unmute.kyutai_constants import LLM_SERVER
 
 from ..kyutai_constants import KYUTAI_LLM_API_KEY, KYUTAI_LLM_MODEL
+
+logger = logging.getLogger(__name__)
 
 INTERRUPTION_CHAR = "—"  # em-dash
 USER_SILENCE_MARKER = "..."
@@ -39,7 +42,9 @@ def preprocess_messages_for_llm(
         # If the llm was interrupted we don't want to insert the INTERRUPTION_CHAR
         # into the context, otherwise the LLM might want to repeat it.
         if isinstance(message.get("content"), str):
-            message["content"] = message["content"].strip().removesuffix(INTERRUPTION_CHAR)
+            message["content"] = (
+                message["content"].strip().removesuffix(INTERRUPTION_CHAR)
+            )
 
         if (
             output
@@ -78,6 +83,7 @@ def preprocess_messages_for_llm(
             message["content"] = message["content"][len(USER_SILENCE_MARKER) :]
 
     return output
+
 
 async def rechunk_to_words(iterator: AsyncIterator[str]) -> AsyncIterator[str]:
     """Rechunk the stream of text to whole words.
@@ -189,7 +195,9 @@ class MistralStream:
         tool_choice: str | None = None,
     ) -> AsyncIterator[Any]:
         if tools:
-            raise NotImplementedError("MistralStream does not support tool calling yet.")
+            raise NotImplementedError(
+                "MistralStream does not support tool calling yet."
+            )
         event_stream = await self.mistral.chat.stream_async(
             model="mistral-large-latest",
             messages=cast(Any, messages),  # It's too annoying to type this properly
@@ -257,6 +265,15 @@ class VLLMStream:
             create_kwargs["tools"] = tools
         if tool_choice:
             create_kwargs["tool_choice"] = tool_choice
+
+        logger.info("=== LLM API REQUEST ===")
+        logger.info("Model: %s", create_kwargs["model"])
+        logger.info("Messages: %s", create_kwargs["messages"])
+        logger.info("Tools: %s", tools)
+        logger.info("Tool choice: %s", tool_choice)
+        logger.info("Temperature: %s", create_kwargs["temperature"])
+        logger.info("Extra body: %s", create_kwargs["extra_body"])
+        logger.info("=======================")
 
         stream = await self.client.chat.completions.create(**create_kwargs)
 

@@ -27,6 +27,8 @@ import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 import { tools, handleToolCall, fetchMcpTools, getAllTools } from "./tools";
 
+const URL_REGEX = /https?:\/\/[^\s]+/;
+
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
   const [debugDict, setDebugDict] = useState<object | null>(null);
@@ -35,6 +37,7 @@ const Unmute = () => {
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
   const [mcpTools, setMcpTools] = useState<any[]>([]);
+  const [hasUrlInToolCall, setHasUrlInToolCall] = useState(false);
   const chatHistory = compressChatHistory(rawChatHistory, "");
   const displayChatHistory = chatHistory.map(
     (message) => {
@@ -195,6 +198,7 @@ const Unmute = () => {
       setShouldConnect(false);
       shutdownAudio();
       setRawChatHistory([]);
+      setHasUrlInToolCall(false);
     }
   };
 
@@ -215,6 +219,7 @@ const Unmute = () => {
       setShouldConnect(false);
       shutdownAudio();
       setRawChatHistory([]);
+      setHasUrlInToolCall(false);
     }
   }, [readyState, shutdownAudio]);
 
@@ -270,6 +275,11 @@ const Unmute = () => {
           continue;
         }
 
+        const argsStr = String(call.arguments ?? "");
+        if (URL_REGEX.test(argsStr)) {
+          setHasUrlInToolCall(true);
+        }
+
         setRawChatHistory((prev) => [
           ...prev,
           {
@@ -280,21 +290,26 @@ const Unmute = () => {
                 id: call.call_id,
                 type: "function",
                 function: {
-                  name: call.name,
-                  arguments: call.arguments,
+                  name: call.name ?? "",
+                  arguments: argsStr,
                 },
               },
             ],
           },
         ]);
 
-        handleToolCall(call, backendServerUrl).then(toolResult => {
+        // @ts-expect-error - TypeScript incorrectly infers call.arguments as string | null
+        handleToolCall({ name: call.name ?? "", arguments: argsStr }, backendServerUrl).then(toolResult => {
+          const resultStr = toolResult ? JSON.stringify(toolResult) : "";
+          if (resultStr && URL_REGEX.test(resultStr)) {
+            setHasUrlInToolCall(true);
+          }
           setRawChatHistory((prev) => [
             ...prev,
             {
               role: "tool",
               tool_call_id: call.call_id,
-              content: JSON.stringify(toolResult),
+              content: resultStr,
             },
           ]);
           const result = {
@@ -302,7 +317,7 @@ const Unmute = () => {
             item: {
               type: "function_call_output",
               call_id: call.call_id,
-              output: JSON.stringify(toolResult),
+              output: resultStr,
             }
           }
           sendMessage(JSON.stringify(result));
@@ -311,13 +326,14 @@ const Unmute = () => {
           }));
         });
       }
+    } else if (data.type === "response.audio.done") {
+      setHasUrlInToolCall(false);
     } else {
       const ignoredTypes = [
         "session.updated",
         "response.created",
         "response.text.delta",
         "response.text.done",
-        "response.audio.done",
         "conversation.item.input_audio_transcription.delta",
         "input_audio_buffer.speech_stopped",
         "input_audio_buffer.speech_started",
@@ -401,6 +417,7 @@ const Unmute = () => {
     setShouldConnect(false);
     shutdownAudio();
     setRawChatHistory([]);
+    setHasUrlInToolCall(false);
   }, [shutdownAudio, unmuteConfig.voice, unmuteConfig.instructions]);
 
   if (!healthStatus || !backendServerUrl) {
@@ -425,7 +442,7 @@ const Unmute = () => {
           <UnmuteHeader />
         </header>
         {/* Centered concentric circles: green filled (assistant) + white stroke (user) overlaid */}
-        <div className="flex items-center justify-center w-full grow">
+        <div className={clsx("flex items-center w-full grow", hasUrlInToolCall ? "justify-start pl-8" : "justify-center")}>
           <div className="relative w-72 h-72 md:w-96 md:h-96 2xl:w-[28rem] 2xl:h-[28rem]">
             {/* Green filled circle (assistant) — bottom layer */}
             <PositionedAudioVisualizer

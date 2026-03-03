@@ -175,11 +175,11 @@ async function callMcpTool(backendServerUrl: string, name: string, toolArgs: Rec
 
 const builtInToolNames = ['get_weather', 'get_coordinates', 'get_jokes', 'home_assistant'];
 
-export async function handleToolCall(call: { name: string, arguments: string }, backendServerUrl: string) {
+export async function handleToolCall(call: { name: string | null | undefined, arguments: string | null | undefined }, backendServerUrl: string) {
     console.log(`Handling function call: ${call.name}`);
 
     try {
-        const args = JSON.parse(call.arguments || "{}");
+        const args = JSON.parse((call.arguments ?? "").toString() || "{}");
         console.log(`Function call ${call.name} args:`, args);
         
         let result;

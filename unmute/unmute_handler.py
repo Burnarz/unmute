@@ -1,11 +1,20 @@
 import asyncio
 import math
 import random
+import re
 from functools import partial
 from logging import getLogger
 from pathlib import Path
 from typing import Any, Literal, cast
 from os import getenv
+
+
+URL_PATTERN = re.compile(r"https?://[^\s]+")
+
+
+def remove_urls_from_text(text: str) -> str:
+    return URL_PATTERN.sub("[link]", text)
+
 
 import numpy as np
 import websockets
@@ -294,7 +303,8 @@ class UnmuteHandler(AsyncStreamHandler):
                         break  # We've been interrupted
 
                     assert isinstance(delta, str)  # make Pyright happy
-                    await tts.send(delta)
+                    text_for_tts = remove_urls_from_text(delta)
+                    await tts.send(text_for_tts)
 
                 elif "function" in chunk:
                     tool_call = chunk["function"]

@@ -424,26 +424,28 @@ const Unmute = () => {
         <header className="static md:absolute max-w-6xl px-3 md:px-8 right-0 flex justify-end z-10">
           <UnmuteHeader />
         </header>
-        <div
-          className={clsx(
-            "w-full h-auto min-h-75",
-            "flex flex-row-reverse md:flex-row items-center justify-center grow",
-            "-mt-10 md:mt-0 mb-10 md:mb-0 md:-mr-4",
-          )}
-        >
-          <PositionedAudioVisualizer
-            chatHistory={chatHistory}
-            role={"assistant"}
-            analyserNode={audioProcessor.current?.outputAnalyser || null}
-            onCircleClick={onConnectButtonPress}
-            isConnected={shouldConnect}
-          />
-          <PositionedAudioVisualizer
-            chatHistory={chatHistory}
-            role={"user"}
-            analyserNode={audioProcessor.current?.inputAnalyser || null}
-            isConnected={shouldConnect}
-          />
+        {/* Centered concentric circles: green filled (assistant) + white stroke (user) overlaid */}
+        <div className="flex items-center justify-center w-full grow">
+          <div className="relative w-72 h-72 md:w-96 md:h-96 2xl:w-[28rem] 2xl:h-[28rem]">
+            {/* Green filled circle (assistant) — bottom layer */}
+            <PositionedAudioVisualizer
+              chatHistory={chatHistory}
+              role={"assistant"}
+              analyserNode={audioProcessor.current?.outputAnalyser || null}
+              onCircleClick={onConnectButtonPress}
+              isConnected={shouldConnect}
+              className="absolute inset-0"
+            />
+            {/* White stroke circle (user) — top layer, concentric with gap, non-interactive */}
+            <PositionedAudioVisualizer
+              chatHistory={chatHistory}
+              role={"user"}
+              analyserNode={audioProcessor.current?.inputAnalyser || null}
+              isConnected={shouldConnect}
+              gapFromGreen={10}
+              className="absolute inset-0 pointer-events-none"
+            />
+          </div>
         </div>
         {showSubtitles && <Subtitles chatHistory={displayChatHistory} />}
         <UnmuteConfigurator

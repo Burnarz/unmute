@@ -5,16 +5,22 @@ import { ChatMessage } from "./chatHistory";
 const WIDTH_INACTIVE = 3;
 const WIDTH_ACTIVE = 5;
 
+// Gap in pixels between the green filled circle radius and the white circle stroke
+const GAP_FROM_GREEN = 15;
+
+// Opacity of the white circle when the user is not speaking
+const OPACITY_INACTIVE = 0.3;
+const OPACITY_ACTIVE = 1.0;
+
 // Size scale factors for connected/disconnected states
-const SCALE_CONNECTED = 1;
-const SCALE_DISCONNECTED = 0.8;
+const SCALE_CONNECTED = 0.6;
+const SCALE_DISCONNECTED = 0.4;
 const ANIMATION_DURATION = 500; // milliseconds
 
 const INTERRUPTION_CHAR = "—"; // em-dash
-let lastResetTime = 0;
 
 const sampleToNormalizedRadius = (x: number) => {
-  return 0.6 + 0.2 * Math.tanh(x * 2);
+  return 0.8 + 0.2 * Math.tanh(x * 2);
 };
 
 interface Positioning {
@@ -30,31 +36,59 @@ const drawCircleVisualization = (
   colorName: string,
   lineWidth: number,
   animationProgress: number,
-  positioning: Positioning
+  positioning: Positioning,
+  filled: boolean = false,
+  radiusOffset: number = 0,
+  opacity: number = 1.0
 ) => {
+  // Calculate scale factor from animation progress (0 = disconnected, 1 = connected)
   const scaleFactor =
     SCALE_DISCONNECTED +
     (SCALE_CONNECTED - SCALE_DISCONNECTED) * animationProgress;
 
-  const now = Date.now();
-  if (now - lastResetTime >= 500) {
-    canvas.width = canvas.width; // reset natif
-    lastResetTime = now;
-  }
+  const color = getCSSVariable(colorName);
 
+  canvasCtx.beginPath();
   for (let i = 0; i < data.length; i++) {
-    const radius =
+    const baseRadius =
       positioning.radius * sampleToNormalizedRadius(data[i]) * scaleFactor;
+    const radius = baseRadius + radiusOffset;
+    const angle = (i / data.length) * Math.PI * 2;
 
-    canvasCtx.beginPath();
-    canvasCtx.arc(
-      positioning.centerX,
-      positioning.centerY,
-      radius,
-      0,
-      Math.PI * 2
-    );
-    canvasCtx.strokeStyle = getCSSVariable(colorName);
+    const x = positioning.centerX + radius * Math.cos(angle);
+    const y = positioning.centerY + radius * Math.sin(angle);
+    if (i === 0) {
+      canvasCtx.moveTo(x, y);
+    } else {
+      canvasCtx.lineTo(x, y);
+    }
+  }
+  canvasCtx.closePath();
+
+  if (filled) {
+    // Parse color to apply opacity
+    const tempCanvas = document.createElement("canvas");
+    const tempCtx = tempCanvas.getContext("2d");
+    if (tempCtx) {
+      tempCtx.fillStyle = color;
+      tempCtx.fillRect(0, 0, 1, 1);
+      const rgba = tempCtx.getImageData(0, 0, 1, 1).data;
+      canvasCtx.fillStyle = `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${opacity})`;
+    } else {
+      canvasCtx.fillStyle = color;
+    }
+    canvasCtx.fill();
+  } else {
+    const tempCanvas = document.createElement("canvas");
+    const tempCtx = tempCanvas.getContext("2d");
+    if (tempCtx) {
+      tempCtx.fillStyle = color;
+      tempCtx.fillRect(0, 0, 1, 1);
+      const rgba = tempCtx.getImageData(0, 0, 1, 1).data;
+      canvasCtx.strokeStyle = `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${opacity})`;
+    } else {
+      canvasCtx.strokeStyle = color;
+    }
     canvasCtx.lineWidth = lineWidth;
     canvasCtx.stroke();
   }
@@ -135,7 +169,7 @@ const getIsActive = (
 
     // Empty messages, or ones where the LLM started generating but was interrupted
     // before it said anything
-    if (message.content === "" || message.content === INTERRUPTION_CHAR)
+    if (message.content === "" || message.content === INTERRUPTION_CHAR || message.content === null)
       continue;
 
     if (message.content === "...") {
@@ -161,6 +195,7 @@ export interface UseAudioVisualizerCircleOptions {
   showPlayButton?: boolean;
   positioning?: Positioning;
   clearCanvas: boolean;
+  gapFromGreen?: number;
 }
 
 export const useAudioVisualizerCircle = (
@@ -175,6 +210,7 @@ export const useAudioVisualizerCircle = (
     showPlayButton = false,
     positioning,
     clearCanvas,
+    gapFromGreen = GAP_FROM_GREEN,
   } = options;
 
   const isActive = getIsActive(chatHistory, role);
@@ -210,7 +246,7 @@ export const useAudioVisualizerCircle = (
       if (
         role === "user" &&
         chatHistory[chatHistory.length - 1].role === "assistant" &&
-        // An interruption
+        // An interruption (guard against null content from tool calls)
         chatHistory[chatHistory.length - 1].content?.endsWith(
           INTERRUPTION_CHAR
         ) &&
@@ -331,7 +367,10 @@ export const useAudioVisualizerCircle = (
           WIDTH_INACTIVE * widthScale
         ),
         animationProgress,
-        currentPositioning
+        currentPositioning,
+        isAssistant,                          // filled = true for assistant (green)
+        isAssistant ? 0 : gapFromGreen,        // offset for user (white) circle
+        isAssistant ? 1.0 : (isActive ? OPACITY_ACTIVE : OPACITY_INACTIVE) // opacity
       );
 
       // Draw play button if we have onClick and not fully connected

@@ -258,6 +258,7 @@ const Unmute = () => {
         ...prev,
         { role: "user", content: " " + data.delta },
       ]);
+      setHasUrlInToolCall(false);
     } else if (data.type === "response.text.delta") {
       // Text-to-speech output
       setRawChatHistory((prev) => [
@@ -326,8 +327,6 @@ const Unmute = () => {
           }));
         });
       }
-    } else if (data.type === "response.audio.done") {
-      setHasUrlInToolCall(false);
     } else {
       const ignoredTypes = [
         "session.updated",

@@ -71,6 +71,33 @@ logging.basicConfig(
 @app.on_event("startup")
 async def startup_event():
     """Pre-initialize MCP manager at server startup."""
+    mcp_http_url = os.environ.get("MCP_HTTP_URL", "http://127.0.0.1:3001")
+    mcp_health_url = f"{mcp_http_url}/health"
+    max_attempts = int(os.environ.get("MCP_STARTUP_MAX_ATTEMPTS", "20"))
+    retry_delay_sec = float(os.environ.get("MCP_STARTUP_RETRY_DELAY_SEC", "1.0"))
+
+    mcp_ready = False
+    for attempt in range(1, max_attempts + 1):
+        is_up = await asyncio.to_thread(_check_server_status, mcp_health_url)
+        if is_up:
+            mcp_ready = True
+            break
+        logger.info(
+            "MCP not ready yet (%d/%d), retrying in %.1fs",
+            attempt,
+            max_attempts,
+            retry_delay_sec,
+        )
+        await asyncio.sleep(retry_delay_sec)
+
+    if not mcp_ready:
+        logger.warning(
+            "MCP did not become ready at startup (%s). "
+            "Continuing without MCP pre-initialization.",
+            mcp_health_url,
+        )
+        return
+
     try:
         from unmute.mcp_manager import get_mcp_manager
 

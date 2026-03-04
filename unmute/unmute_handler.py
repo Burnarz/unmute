@@ -41,8 +41,7 @@ from unmute.llm.chatbot import Chatbot
 from unmute.llm.llm_utils import (
     INTERRUPTION_CHAR,
     USER_SILENCE_MARKER,
-    VLLMStream,
-    get_openai_client,
+    get_llm_stream,
     rechunk_to_words_and_functions,
 )
 from unmute.openai_realtime_api_events import random_id
@@ -138,7 +137,6 @@ class UnmuteHandler(AsyncStreamHandler):
         self.expecting_tts_confirmation = False
 
         self.chatbot = Chatbot()
-        self.openai_client = get_openai_client()
 
         self.turn_transition_lock = asyncio.Lock()
 
@@ -239,8 +237,7 @@ class UnmuteHandler(AsyncStreamHandler):
         quest = await self.start_up_tts(generating_message_i)
         # Used to debug first message temperature
         logger.info("generating_message_i: %s", generating_message_i)
-        llm = VLLMStream(
-            self.openai_client,
+        llm = get_llm_stream(
             temperature=FIRST_MESSAGE_TEMPERATURE
             if generating_message_i == 4
             else FURTHER_MESSAGES_TEMPERATURE,

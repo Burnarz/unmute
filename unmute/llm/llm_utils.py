@@ -1,6 +1,8 @@
 import os
 import re
 import logging
+import json
+from dataclasses import dataclass
 from copy import deepcopy
 from functools import cache
 from typing import Any, AsyncIterator, Protocol, cast
@@ -14,12 +16,35 @@ from openai.types.chat.chat_completion_message_tool_call import (
 
 from unmute.kyutai_constants import LLM_SERVER
 
-from ..kyutai_constants import KYUTAI_LLM_API_KEY, KYUTAI_LLM_MODEL
+from ..kyutai_constants import (
+    KYUTAI_LLM_API_KEY,
+    KYUTAI_LLM_MODEL,
+    KYUTAI_LLM_PROVIDER,
+)
 
 logger = logging.getLogger(__name__)
 
 INTERRUPTION_CHAR = "—"  # em-dash
 USER_SILENCE_MARKER = "..."
+
+
+@dataclass
+class ToolFunctionDelta:
+    name: str
+    arguments: str
+
+
+@dataclass
+class ToolCallDelta:
+    index: int
+    id: str
+    function: ToolFunctionDelta
+
+
+@dataclass
+class StreamDelta:
+    content: str | None = None
+    tool_calls: list[ToolCallDelta] | None = None
 
 
 def preprocess_messages_for_llm(
@@ -208,6 +233,143 @@ class MistralStream:
             yield event.data.choices[0].delta
 
 
+def _normalize_ollama_host(url: str) -> str:
+    # Ollama client expects host without any `/v1` suffix.
+    return url.removesuffix("/v1")
+
+
+def _parse_tool_arguments(arguments: Any) -> str:
+    if hasattr(arguments, "model_dump"):
+        arguments = arguments.model_dump()
+    if isinstance(arguments, str):
+        return arguments
+    try:
+        return json.dumps(arguments or {}, ensure_ascii=True)
+    except TypeError:
+        logger.warning("Unexpected tool arguments type from Ollama: %s", type(arguments))
+        return "{}"
+
+
+def _field(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _convert_ollama_chunk_to_delta(chunk: Any) -> StreamDelta:
+    message = _field(chunk, "message", {})
+    content = _field(message, "content")
+    tool_calls_data = _field(message, "tool_calls", []) or []
+
+    if not tool_calls_data:
+        return StreamDelta(content=content)
+
+    tool_calls: list[ToolCallDelta] = []
+    for i, tool_call in enumerate(tool_calls_data):
+        function = _field(tool_call, "function", {})
+        # Ollama does not guarantee call ids in stream chunks, synthesize one.
+        call_id = _field(tool_call, "id") or f"ollama_call_{i}"
+        tool_calls.append(
+            ToolCallDelta(
+                index=i,
+                id=call_id,
+                function=ToolFunctionDelta(
+                    name=_field(function, "name", ""),
+                    arguments=_parse_tool_arguments(_field(function, "arguments")),
+                ),
+            )
+        )
+    return StreamDelta(content=content, tool_calls=tool_calls)
+
+
+def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        converted_message = deepcopy(message)
+        tool_calls = converted_message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                function = tool_call.get("function", {})
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        function["arguments"] = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        # Keep string if it's not JSON.
+                        function["arguments"] = arguments
+        converted.append(converted_message)
+    return converted
+
+
+def _to_ollama_tools(tools: list[Any]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        tool_dict = tool.model_dump() if hasattr(tool, "model_dump") else tool
+        if not isinstance(tool_dict, dict):
+            logger.warning("Skipping unsupported tool type for Ollama: %s", type(tool))
+            continue
+        converted.append(tool_dict)
+    return converted
+
+
+class OllamaStream:
+    def __init__(
+        self,
+        server_url: str = LLM_SERVER,
+        temperature: float = 1.0,
+        extra_body: dict[str, Any] | None = None,
+    ):
+        self.temperature = temperature
+        self.extra_body = extra_body or {}
+        self.model = KYUTAI_LLM_MODEL
+        if not self.model:
+            raise ValueError(
+                "KYUTAI_LLM_MODEL must be set when using KYUTAI_LLM_PROVIDER=ollama."
+            )
+
+        try:
+            from ollama import AsyncClient
+        except ImportError as e:
+            raise RuntimeError(
+                "The `ollama` package is required for KYUTAI_LLM_PROVIDER=ollama. "
+                "Install dependencies with `uv sync`."
+            ) from e
+
+        self.client = AsyncClient(host=_normalize_ollama_host(server_url))
+
+    async def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+    ) -> AsyncIterator[Any]:
+        create_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": _to_ollama_messages(messages),
+            "stream": True,
+            "think": False,
+            "options": {"temperature": self.temperature},
+        }
+        create_kwargs["options"].update(self.extra_body)
+        if tools:
+            create_kwargs["tools"] = _to_ollama_tools(tools)
+        if tool_choice and tool_choice != "auto":
+            # Ollama Python client doesn't currently expose OpenAI-like tool_choice.
+            logger.warning("Ignoring unsupported Ollama tool_choice=%s", tool_choice)
+
+        logger.info("=== LLM API REQUEST (OLLAMA) ===")
+        logger.info("Model: %s", create_kwargs["model"])
+        logger.info("Messages: %s", create_kwargs["messages"])
+        logger.info("Tools: %s", tools)
+        logger.info("Temperature: %s", self.temperature)
+        logger.info("Options: %s", create_kwargs["options"])
+        logger.info("================================")
+
+        stream = await self.client.chat(**create_kwargs)
+        async for chunk in stream:
+            yield _convert_ollama_chunk_to_delta(chunk)
+
+
 def get_openai_client(
     server_url: str = LLM_SERVER, api_key: str | None = KYUTAI_LLM_API_KEY
 ) -> AsyncOpenAI:
@@ -280,3 +442,21 @@ class VLLMStream:
         async with stream:
             async for chunk in stream:
                 yield chunk.choices[0].delta
+
+
+def get_llm_stream(
+    temperature: float = 1.0,
+    extra_body: dict[str, Any] | None = None,
+) -> LLMStream:
+    if KYUTAI_LLM_PROVIDER == "ollama":
+        return OllamaStream(
+            server_url=LLM_SERVER,
+            temperature=temperature,
+            extra_body=extra_body,
+        )
+
+    return VLLMStream(
+        get_openai_client(),
+        temperature=temperature,
+        extra_body=extra_body,
+    )

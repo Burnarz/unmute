@@ -43,6 +43,12 @@ services:
       - MCP_BRAVE_BRAVE_API_KEY=${BRAVE_API_KEY}	# Format MCP_SERVER-NAME_ENV-KEY
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
   
   backend:
     image: unmute-backend:latest
@@ -52,7 +58,7 @@ services:
     network_mode: service:mcp
     depends_on:
       mcp:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./unmute:/app/unmute
     environment:
@@ -61,6 +67,7 @@ services:
       - KYUTAI_TTS_URL=ws://tts:8080
       - KYUTAI_LLM_URL=${LLM_URL}
       - KYUTAI_LLM_MODEL=${LLM_MODEL}
+      - KYUTAI_LLM_PROVIDER=ollama
       - KYUTAI_LLM_API_KEY=ollama
       - NEWSAPI_API_KEY=${NEWSAPI_API_KEY}
       - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}

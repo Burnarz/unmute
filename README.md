@@ -216,7 +216,7 @@ you'll need to restart the backend.
 The Unmute backend can be used with any OpenAI compatible LLM server. By default, the `docker-compose.yml` configures VLLM to enable a fully self-contained, local setup.
 You can modify this file to change to another external LLM, such as an OpenAI server, a local ollama setup, etc.
 
-For ollama, as environment variables for the `unmute-backend` image, replace
+For Ollama via OpenAI-compatible API, as environment variables for the `unmute-backend` image, replace
 ```yaml
   backend:
     image: unmute-backend:latest
@@ -239,7 +239,21 @@ with
     extra_hosts:
       - "host.docker.internal:host-gateway"
 ```
-This points to your localhost server. Alternatively, for OpenAI, you can use
+This points to your localhost server.
+
+If you want to use the native `ollama` Python library instead of the OpenAI-compatible route, add:
+```yaml
+  backend:
+    image: unmute-backend:latest
+    [..]
+    environment:
+      [..]
+      - KYUTAI_LLM_PROVIDER=ollama
+      - KYUTAI_LLM_URL=http://host.docker.internal:11434
+      - KYUTAI_LLM_MODEL=gemma3
+```
+
+Alternatively, for OpenAI, you can use
 ```yaml
   backend:
     image: unmute-backend:latest

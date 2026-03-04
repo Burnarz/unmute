@@ -28,6 +28,7 @@ class Chatbot:
         self.tools: list[dict[str, Any]] | None = None
         self.mcp_tools: list[dict[str, Any]] | None = None
         self.tool_choice: str | None = None
+        self.pending_memory: str | None = None
 
     def get_all_tools(self) -> list[dict[str, Any]]:
         """Get all tools (built-in + MCP) merged."""
@@ -116,6 +117,14 @@ class Chatbot:
             #     # so we add one.
             #    {"role": "user", "content": "Hello!"},
             ]
+
+        if self.pending_memory:
+            memory_message = {
+                "role": "system",
+                "content": f"Remembering: {self.pending_memory}",
+            }
+            insert_index = 1 if messages and messages[0]["role"] == "system" else 0
+            messages = messages[:insert_index] + [memory_message] + messages[insert_index:]
 
         messages = preprocess_messages_for_llm(messages)
 

@@ -131,6 +131,7 @@ class UnmuteHandler(AsyncStreamHandler):
         self.quest_manager = QuestManager()
 
         self.stt_last_message_time: float = 0
+        self.last_user_turn_start_time: float = 0
         self.stt_end_of_flush_time: float | None = None
         self.stt_flush_timer = Stopwatch()
 
@@ -244,7 +245,7 @@ class UnmuteHandler(AsyncStreamHandler):
         logger.info("generating_message_i: %s", generating_message_i)
         llm = get_llm_stream(
             temperature=FIRST_MESSAGE_TEMPERATURE
-            if generating_message_i == 4
+            if generating_message_i == 2
             else FURTHER_MESSAGES_TEMPERATURE,
             extra_body=self.llm_extra_body,
         )
@@ -459,7 +460,11 @@ class UnmuteHandler(AsyncStreamHandler):
 
         # If this doesn't update, it means the receive loop isn't running because
         # the process is busy with something else, which is bad.
-        self.debug_dict["last_receive_time"] = self.audio_received_sec()
+        now_sec = self.audio_received_sec()
+        self.debug_dict["last_receive_time_absolute"] = now_sec
+        self.debug_dict["last_receive_time"] = max(
+            0.0, now_sec - self.last_user_turn_start_time
+        )
         float_audio = audio_to_float32(array)
 
         self.debug_plot_data.append(
@@ -587,9 +592,8 @@ class UnmuteHandler(AsyncStreamHandler):
             if not result:
                 result = await mcp_manager.load_memory()
             if result:
-                memory_msg = {"role": "system", "content": f"Remembering: {result}"}
-                self.chatbot.chat_history.append(memory_msg)
-                logger.info("Loaded memory from cache")
+                self.chatbot.pending_memory = result
+                logger.info("Loaded memory from cache (deferred to first LLM request)")
         except Exception as e:
             logger.warning("Failed to load memory: %s", e)
 
@@ -656,6 +660,8 @@ class UnmuteHandler(AsyncStreamHandler):
                 self.stt_last_message_time = data.start_time
                 is_new_message = await self.add_chat_message_delta(data.text, "user")
                 if is_new_message:
+                    self.last_user_turn_start_time = self.audio_received_sec()
+                    self.debug_dict["last_receive_time"] = 0.0
                     # Ensure we don't stop after the first word if the VAD didn't have
                     # time to react.
                     stt.pause_prediction.value = 0.0

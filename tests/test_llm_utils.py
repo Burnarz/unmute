@@ -4,6 +4,7 @@ from unmute.llm.llm_utils import (
     _convert_ollama_chunk_to_delta,
     _to_ollama_tools,
     _to_ollama_messages,
+    preprocess_messages_for_llm,
     rechunk_to_words,
 )
 
@@ -105,3 +106,15 @@ def test_to_ollama_tools_accepts_model_dump_objects():
     converted = _to_ollama_tools([ToolLike()])
     assert len(converted) == 1
     assert converted[0]["function"]["name"] == "weather"
+
+
+def test_preprocess_inserts_dummy_user_after_multiple_system_messages():
+    messages = [
+        {"role": "system", "content": "s1"},
+        {"role": "system", "content": "s2"},
+        {"role": "assistant", "content": ""},
+    ]
+
+    processed = preprocess_messages_for_llm(messages)
+    assert [m["role"] for m in processed[:3]] == ["system", "system", "user"]
+    assert processed[2]["content"] == "Hello."

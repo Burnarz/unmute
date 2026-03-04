@@ -260,6 +260,11 @@ class ConversationItemCreate(BaseEvent[Literal["conversation.item.create"]]):
     item: ConversationItem = Field(..., discriminator="type")
 
 
+class UnmuteControl(BaseEvent[Literal["unmute.control"]]):
+    action: Literal["trim_history", "set_thinking_mode"]
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class UnmuteInterruptedByVAD(BaseEvent[Literal["unmute.interrupted_by_vad"]]):
     """The VAD interrupted the response generation."""
 
@@ -290,6 +295,7 @@ ClientEvent = Union[
     ResponseCreate,
     InputAudioBufferAppend,
     ConversationItemCreate,
+    UnmuteControl,
     # Used internally for recording, we're not expecting the user to send this
     UnmuteInputAudioBufferAppendAnonymized,
 ]

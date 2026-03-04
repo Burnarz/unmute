@@ -250,6 +250,14 @@ def _parse_tool_arguments(arguments: Any) -> str:
         return "{}"
 
 
+def _coerce_to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _field(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
@@ -343,14 +351,18 @@ class OllamaStream:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | None = None,
     ) -> AsyncIterator[Any]:
+        extra_body = dict(self.extra_body)
         create_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": _to_ollama_messages(messages),
             "stream": True,
-            "think": False,
             "options": {"temperature": self.temperature},
         }
-        create_kwargs["options"].update(self.extra_body)
+
+        if "think" in extra_body:
+            create_kwargs["think"] = _coerce_to_bool(extra_body.pop("think"))
+
+        create_kwargs["options"].update(extra_body)
         if tools:
             create_kwargs["tools"] = _to_ollama_tools(tools)
         if tool_choice and tool_choice != "auto":

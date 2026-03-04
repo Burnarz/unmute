@@ -240,6 +240,33 @@ const Unmute = () => {
     }
   };
 
+  const trimLocalHistory = useCallback((interactions: number) => {
+    setRawChatHistory((prev) => {
+      let remaining = compressChatHistory(prev, "");
+      let removed = 0;
+      const target = Math.max(1, interactions);
+
+      while (removed < target) {
+        let lastUserIndex = -1;
+        for (let i = remaining.length - 1; i >= 0; i -= 1) {
+          if (remaining[i].role === "user") {
+            lastUserIndex = i;
+            break;
+          }
+        }
+
+        if (lastUserIndex < 0) {
+          break;
+        }
+
+        remaining = remaining.slice(0, lastUserIndex);
+        removed += 1;
+      }
+
+      return remaining;
+    });
+  }, []);
+
   // If the websocket connection is closed, shut down the audio processing and reset memory
   useEffect(() => {
     if (readyState === ReadyState.CLOSING || readyState === ReadyState.CLOSED) {
@@ -321,8 +348,29 @@ const Unmute = () => {
           },
         ]);
 
-        // @ts-expect-error - TypeScript incorrectly infers call.arguments as string | null
-        handleToolCall({ name: call.name ?? "", arguments: argsStr }, backendServerUrl).then(toolResult => {
+        if (!backendServerUrl) {
+          console.warn("No backendServerUrl available for tool call");
+          continue;
+        }
+
+        handleToolCall(
+          { name: call.name ?? "", arguments: argsStr },
+          backendServerUrl,
+          (action, payload) => {
+            if (action === "trim_history") {
+              const interactions = Number(payload.interactions ?? 1);
+              trimLocalHistory(interactions);
+            }
+
+            sendMessage(
+              JSON.stringify({
+                type: "unmute.control",
+                action,
+                data: payload,
+              }),
+            );
+          }
+        ).then(toolResult => {
           const resultStr = toolResult ? JSON.stringify(toolResult) : "";
           setRawChatHistory((prev) => [
             ...prev,
@@ -363,7 +411,7 @@ const Unmute = () => {
         console.warn("Received unknown message:", data);
       }
     }
-  }, [audioProcessor, lastMessage]);
+  }, [audioProcessor, backendServerUrl, lastMessage, sendMessage, trimLocalHistory]);
 
   // When we connect, we send the initial config (voice and instructions) to the server.
   // Also clear the chat history.

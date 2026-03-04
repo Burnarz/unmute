@@ -740,6 +740,8 @@ async def receive_loop(
             else:
                 raise ValueError(f"Unknown item type: {message.item.type}")
             handler.chatbot.chat_history.append(new_message)
+        elif isinstance(message, ora.UnmuteControl):
+            await handler.apply_control(message.action, message.data)
 
         elif isinstance(message, ora.UnmuteAdditionalOutputs):
             # Don't record this: it's a debugging message and can be verbose. Anything

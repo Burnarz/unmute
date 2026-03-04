@@ -33,6 +33,8 @@ from unmute.audio_input_override import AudioInputOverride
 from unmute.exceptions import make_ora_error
 from unmute.kyutai_constants import (
     FRAME_TIME_SEC,
+    KYUTAI_LLM_MODEL,
+    KYUTAI_LLM_PROVIDER,
     RECORDINGS_DIR,
     SAMPLE_RATE,
     SAMPLES_PER_FRAME,
@@ -78,6 +80,7 @@ TOOL_CALL_CONFIRMATION_PHRASES = [
 
 FURTHER_MESSAGES_TEMPERATURE = float(getenv("FURTHER_MESSAGES_TEMPERATURE", "1.0"))
 LLM_EXTRA_BODY = {}
+DEFAULT_LLM_THINKING = getenv("LLM_THINKING")
 # LLM_EXTRA_BODY = {
 #     "top_p": 0.95,
 #     "top_k": 60,
@@ -137,6 +140,8 @@ class UnmuteHandler(AsyncStreamHandler):
         self.expecting_tts_confirmation = False
 
         self.chatbot = Chatbot()
+        self.llm_extra_body: dict[str, Any] = dict(LLM_EXTRA_BODY)
+        self._apply_default_thinking_mode()
 
         self.turn_transition_lock = asyncio.Lock()
 
@@ -241,7 +246,7 @@ class UnmuteHandler(AsyncStreamHandler):
             temperature=FIRST_MESSAGE_TEMPERATURE
             if generating_message_i == 4
             else FURTHER_MESSAGES_TEMPERATURE,
-            extra_body=LLM_EXTRA_BODY,
+            extra_body=self.llm_extra_body,
         )
 
         messages = self.chatbot.preprocessed_messages()
@@ -856,3 +861,72 @@ class UnmuteHandler(AsyncStreamHandler):
             await self.recorder.shutdown(keep_recording=False)
             self.recorder = None
             logger.info("Recording disabled for a session.")
+
+    async def apply_control(self, action: str, data: dict[str, Any] | None = None):
+        payload = data or {}
+
+        if action == "trim_history":
+            interactions = payload.get("interactions", 1)
+            try:
+                interactions_n = int(interactions)
+            except (TypeError, ValueError):
+                interactions_n = 1
+
+            removed = self.chatbot.trim_last_interactions(max(0, interactions_n))
+            logger.info(
+                "Applied trim_history control: requested=%s removed=%d",
+                interactions,
+                removed,
+            )
+            return
+
+        if action == "set_thinking_mode":
+            mode = str(payload.get("mode", "off")).lower().strip()
+            self._set_thinking_mode(mode)
+            logger.info("Applied set_thinking_mode control: mode=%s", mode)
+            return
+
+        logger.warning("Unknown control action: %s", action)
+
+    def _set_thinking_mode(self, mode: str):
+        is_enabled = mode in {"on", "true", "1", "low", "medium", "high"}
+
+        if KYUTAI_LLM_PROVIDER == "ollama":
+            self.llm_extra_body["think"] = is_enabled
+            self.llm_extra_body.pop("reasoning_effort", None)
+            return
+
+        model = (KYUTAI_LLM_MODEL or "").lower()
+        if "gpt-oss" in model:
+            effort_map = {
+                "off": "low",
+                "false": "low",
+                "0": "low",
+                "on": "medium",
+                "true": "medium",
+                "1": "medium",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+            }
+            self.llm_extra_body["reasoning_effort"] = effort_map.get(mode, "medium")
+            self.llm_extra_body.pop("think", None)
+            return
+
+        self.llm_extra_body["think"] = is_enabled
+        self.llm_extra_body.pop("reasoning_effort", None)
+
+    def _apply_default_thinking_mode(self):
+        if DEFAULT_LLM_THINKING is None:
+            return
+
+        mode = DEFAULT_LLM_THINKING.strip().lower()
+
+        # If a boolean string was provided, map to on/off semantics.
+        if mode in {"true", "1", "yes", "on"}:
+            mode = "on"
+        elif mode in {"false", "0", "no", "off"}:
+            mode = "off"
+
+        self._set_thinking_mode(mode)
+        logger.info("Default LLM thinking mode from env applied: %s", mode)

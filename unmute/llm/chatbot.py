@@ -158,6 +158,30 @@ class Chatbot:
     def get_instructions(self) -> Instructions | None:
         return self._instructions
 
+    def trim_last_interactions(self, num_interactions: int) -> int:
+        """Trim last N interactions, where one interaction starts at a user message.
+
+        Keeps the system prompt intact.
+        """
+        if num_interactions <= 0:
+            return 0
+
+        removed = 0
+        while removed < num_interactions:
+            last_user_index: int | None = None
+            for i in range(len(self.chat_history) - 1, 0, -1):
+                if self.chat_history[i].get("role") == "user":
+                    last_user_index = i
+                    break
+
+            if last_user_index is None:
+                break
+
+            del self.chat_history[last_user_index:]
+            removed += 1
+
+        return removed
+
     def last_message(self, role: str) -> str | None:
         valid_messages = [
             message

@@ -52,6 +52,34 @@ export const builtInTools = [
                 required: ["text"],
             },
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "reset_recent_interactions",
+            description: "Delete the last N user+assistant interactions from memory/context. Use this when the user asks to forget the recent conversation.",
+            parameters: {
+                type: "object",
+                properties: {
+                    interactions: { type: "integer", description: "Number of interactions to remove from the end of history." }
+                },
+                required: ["interactions"],
+            },
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "set_thinking_mode",
+            description: "Control model thinking mode. Use mode='on' or 'off'. For gpt-oss models, use low/medium/high.",
+            parameters: {
+                type: "object",
+                properties: {
+                    mode: { type: "string", enum: ["off", "on", "low", "medium", "high"] }
+                },
+                required: ["mode"],
+            },
+        }
     }
 ];
 
@@ -67,7 +95,7 @@ export async function fetchMcpTools(backendServerUrl: string): Promise<any[]> {
         return mcpToolsFetchPromise;
     }
     
-    mcpToolsFetchPromise = (async () => {
+    mcpToolsFetchPromise = (async (): Promise<any[]> => {
         try {
             const response = await fetch(`${backendServerUrl}/v1/mcp/tools`, {
                 signal: AbortSignal.timeout(5000),
@@ -79,9 +107,10 @@ export async function fetchMcpTools(backendServerUrl: string): Promise<any[]> {
             }
             
             const data = await response.json();
-            cachedMcpTools = data.tools || [];
-            console.log(`Fetched ${cachedMcpTools.length} MCP tools:`, cachedMcpTools.map((t: any) => t.function?.name));
-            return cachedMcpTools;
+            const fetchedTools = data.tools || [];
+            cachedMcpTools = fetchedTools;
+            console.log(`Fetched ${fetchedTools.length} MCP tools:`, fetchedTools.map((t: any) => t.function?.name));
+            return fetchedTools;
         } catch (error) {
             console.warn("Error fetching MCP tools:", error);
             return [];
@@ -173,18 +202,32 @@ async function callMcpTool(backendServerUrl: string, name: string, toolArgs: Rec
     }
 }
 
-const builtInToolNames = ['get_weather', 'get_coordinates', 'get_jokes', 'home_assistant'];
+const builtInToolNames = [
+    "get_weather",
+    "get_coordinates",
+    "get_jokes",
+    "home_assistant",
+    "reset_recent_interactions",
+    "set_thinking_mode",
+];
 
-export async function handleToolCall(call: { name: string | null | undefined, arguments: string | null | undefined }, backendServerUrl: string) {
-    console.log(`Handling function call: ${call.name}`);
+type ToolControlAction = "trim_history" | "set_thinking_mode";
+
+export async function handleToolCall(
+    call: { name: string | null | undefined, arguments: string | null | undefined },
+    backendServerUrl: string,
+    onControl?: (action: ToolControlAction, data: Record<string, any>) => void,
+) {
+    const toolName = call.name ?? "";
+    console.log(`Handling function call: ${toolName}`);
 
     try {
         const args = JSON.parse((call.arguments ?? "").toString() || "{}");
-        console.log(`Function call ${call.name} args:`, args);
+        console.log(`Function call ${toolName} args:`, args);
         
         let result;
-        if (builtInToolNames.includes(call.name)) {
-            switch (call.name) {
+        if (builtInToolNames.includes(toolName)) {
+            switch (toolName) {
                 case 'get_weather':
                     result = await getWeather(args);
                     break;
@@ -197,17 +240,43 @@ export async function handleToolCall(call: { name: string | null | undefined, ar
                 case 'home_assistant':
                     result = await homeAssistant(backendServerUrl, args);
                     break;
+                case 'reset_recent_interactions': {
+                    const interactions = Math.max(
+                        1,
+                        Number(args.interactions ?? args.num_interactions ?? 1)
+                    );
+                    onControl?.("trim_history", { interactions });
+                    result = {
+                        status: "ok",
+                        message: `Requested reset of ${interactions} interaction(s).`,
+                        interactions,
+                    };
+                    break;
+                }
+                case 'set_thinking_mode': {
+                    const mode = String(args.mode ?? "off").toLowerCase();
+                    onControl?.("set_thinking_mode", { mode });
+                    result = {
+                        status: "ok",
+                        message:
+                            mode === "off"
+                                ? "Thinking mode disabled."
+                                : `Thinking mode set to '${mode}'.`,
+                        mode,
+                    };
+                    break;
+                }
                 default:
-                    result = { error: `Unknown function call: ${call.name}` };
+                    result = { error: `Unknown function call: ${toolName}` };
             }
         } else {
-            result = await callMcpTool(backendServerUrl, call.name, args);
+            result = await callMcpTool(backendServerUrl, toolName, args);
         }
 
-        console.log(`Function call ${call.name} result:`, result);
+        console.log(`Function call ${toolName} result:`, result);
         return result;
     } catch (error) {
-        console.error(`Function call ${call.name} failed:`, error);
+        console.error(`Function call ${toolName} failed:`, error);
         if (error instanceof Error) {
             return { error: error.message };
         }

@@ -1,6 +1,6 @@
 "use client";
 import useWebSocket, { ReadyState } from "react-use-websocket";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMicrophoneAccess } from "./useMicrophoneAccess";
 import { base64DecodeOpus, base64EncodeOpus } from "./audioUtil";
 import { useAudioProcessor as useAudioProcessor } from "./useAudioProcessor";
@@ -22,12 +22,12 @@ import useWakeLock from "./useWakeLock";
 import ErrorMessages, { ErrorItem, makeErrorItem } from "./ErrorMessages";
 import { useRecordingCanvas } from "./useRecordingCanvas";
 import { useGoogleAnalytics } from "./useGoogleAnalytics";
-import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 import { tools, handleToolCall, fetchMcpTools, getAllTools } from "./tools";
 
-const URL_REGEX = /https?:\/\/[^\s]+/;
+const URL_REGEX_GLOBAL = /https?:\/\/[^\s"'`)\]}]+/g;
+const IMAGE_URL_REGEX = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?.*)?$/i;
 
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
@@ -37,10 +37,38 @@ const Unmute = () => {
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
   const [mcpTools, setMcpTools] = useState<any[]>([]);
-  const [hasUrlInToolCall, setHasUrlInToolCall] = useState(false);
+  const [showToolResults, setShowToolResults] = useState(true);
   const chatHistory = compressChatHistory(rawChatHistory, "");
-  const displayChatHistory = chatHistory.map(
-    (message) => {
+  const toolUrls = useMemo(() => {
+    const newestFirst: string[] = [];
+
+    const collectUrls = (text: string | null | undefined) => {
+      if (!text) return;
+      const matches = text.match(URL_REGEX_GLOBAL);
+      if (!matches) return;
+      for (const url of matches.reverse()) {
+        newestFirst.push(url);
+      }
+    };
+
+    for (const message of [...rawChatHistory].reverse()) {
+      if (message.role === "tool") {
+        collectUrls(message.content);
+      }
+      if (message.role === "assistant" && message.tool_calls) {
+        for (const call of [...message.tool_calls].reverse()) {
+          collectUrls(String(call.function.arguments ?? ""));
+        }
+      }
+    }
+
+    return newestFirst;
+  }, [rawChatHistory]);
+
+  const toolImageUrls = toolUrls.filter((url) => IMAGE_URL_REGEX.test(url));
+  const toolLinkUrls = toolUrls.filter((url) => !IMAGE_URL_REGEX.test(url));
+  const displayChatHistory: ChatMessage[] = chatHistory.map(
+    (message): ChatMessage => {
       if (message.role === "tool") {
         return {          
           role: "user",
@@ -198,7 +226,6 @@ const Unmute = () => {
       setShouldConnect(false);
       shutdownAudio();
       setRawChatHistory([]);
-      setHasUrlInToolCall(false);
     }
   };
 
@@ -219,7 +246,6 @@ const Unmute = () => {
       setShouldConnect(false);
       shutdownAudio();
       setRawChatHistory([]);
-      setHasUrlInToolCall(false);
     }
   }, [readyState, shutdownAudio]);
 
@@ -258,7 +284,6 @@ const Unmute = () => {
         ...prev,
         { role: "user", content: " " + data.delta },
       ]);
-      setHasUrlInToolCall(false);
     } else if (data.type === "response.text.delta") {
       // Text-to-speech output
       setRawChatHistory((prev) => [
@@ -277,9 +302,6 @@ const Unmute = () => {
         }
 
         const argsStr = String(call.arguments ?? "");
-        if (URL_REGEX.test(argsStr)) {
-          setHasUrlInToolCall(true);
-        }
 
         setRawChatHistory((prev) => [
           ...prev,
@@ -302,9 +324,6 @@ const Unmute = () => {
         // @ts-expect-error - TypeScript incorrectly infers call.arguments as string | null
         handleToolCall({ name: call.name ?? "", arguments: argsStr }, backendServerUrl).then(toolResult => {
           const resultStr = toolResult ? JSON.stringify(toolResult) : "";
-          if (resultStr && URL_REGEX.test(resultStr)) {
-            setHasUrlInToolCall(true);
-          }
           setRawChatHistory((prev) => [
             ...prev,
             {
@@ -416,7 +435,6 @@ const Unmute = () => {
     setShouldConnect(false);
     shutdownAudio();
     setRawChatHistory([]);
-    setHasUrlInToolCall(false);
   }, [shutdownAudio, unmuteConfig.voice, unmuteConfig.instructions]);
 
   if (!healthStatus || !backendServerUrl) {
@@ -437,11 +455,21 @@ const Unmute = () => {
       {/* The main full-height demo */}
       <div className="relative flex w-full min-h-screen flex-col text-white bg-background items-center">
         {/* z-index on the header to put it in front of the circles */}
-        <header className="static md:absolute max-w-6xl px-3 md:px-8 right-0 flex justify-end z-10">
-          <UnmuteHeader />
-        </header>
+        <div className="static md:absolute top-4 left-0 px-3 md:px-8 z-30 flex flex-col items-start gap-2">
+          <header className="max-w-6xl flex justify-start z-20">
+            <UnmuteHeader />
+          </header>
+          <button
+            type="button"
+            onClick={() => setShowToolResults((prev) => !prev)}
+            disabled={toolUrls.length === 0}
+            className="text-xs md:text-sm px-3 py-2 rounded-lg bg-black/50 border border-white/20 hover:bg-black/65 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {showToolResults ? "Hide tool results" : "Show tool results"}
+          </button>
+        </div>
         {/* Centered concentric circles: green filled (assistant) + white stroke (user) overlaid */}
-        <div className={clsx("flex items-center w-full grow", hasUrlInToolCall ? "justify-start pl-8" : "justify-center")}>
+        <div className="flex items-center w-full grow justify-center">
           <div className="relative w-72 h-72 md:w-96 md:h-96 2xl:w-[28rem] 2xl:h-[28rem]">
             {/* Green filled circle (assistant) — bottom layer */}
             <PositionedAudioVisualizer
@@ -463,6 +491,68 @@ const Unmute = () => {
             />
           </div>
         </div>
+        {toolUrls.length > 0 && showToolResults && (
+          <aside className="hidden md:flex absolute right-4 top-4 max-h-[calc(100vh-2rem)] w-80 bg-black/30 backdrop-blur-sm border border-white/10 rounded-xl p-3 overflow-auto z-20 flex-col gap-3">
+            <h3 className="text-sm font-semibold">Tool results</h3>
+            {toolImageUrls.map((url, index) => (
+              <a
+                key={`${url}-${index}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <img
+                  src={url}
+                  alt="Tool result"
+                  className="w-full h-auto rounded-lg border border-white/10"
+                />
+              </a>
+            ))}
+            {toolLinkUrls.map((url, index) => (
+              <a
+                key={`${url}-${index}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-cyan-300 hover:text-cyan-200 break-all underline"
+              >
+                {url}
+              </a>
+            ))}
+          </aside>
+        )}
+        {toolUrls.length > 0 && showToolResults && (
+          <div className="md:hidden w-full px-4 pb-3 flex flex-col gap-2">
+            <h3 className="text-sm font-semibold">Tool results</h3>
+            {toolImageUrls.map((url, index) => (
+              <a
+                key={`${url}-${index}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <img
+                  src={url}
+                  alt="Tool result"
+                  className="w-full h-auto rounded-lg border border-white/10"
+                />
+              </a>
+            ))}
+            {toolLinkUrls.map((url, index) => (
+              <a
+                key={`${url}-${index}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-cyan-300 hover:text-cyan-200 break-all underline"
+              >
+                {url}
+              </a>
+            ))}
+          </div>
+        )}
         {showSubtitles && <Subtitles chatHistory={displayChatHistory} />}
         <UnmuteConfigurator
           backendServerUrl={backendServerUrl}

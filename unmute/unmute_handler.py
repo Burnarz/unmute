@@ -13,7 +13,7 @@ URL_PATTERN = re.compile(r"https?://[^\s]+")
 
 
 def remove_urls_from_text(text: str) -> str:
-    return URL_PATTERN.sub("[link]", text)
+    return URL_PATTERN.sub("", text)
 
 
 import numpy as np

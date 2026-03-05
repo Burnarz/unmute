@@ -373,13 +373,14 @@ class OllamaStream:
             # Ollama Python client doesn't currently expose OpenAI-like tool_choice.
             logger.warning("Ignoring unsupported Ollama tool_choice=%s", tool_choice)
 
-        logger.info("=== LLM API REQUEST (OLLAMA) ===")
-        logger.info("Model: %s", create_kwargs["model"])
-        logger.info("Messages: %s", create_kwargs["messages"])
-        logger.info("Tools: %s", tools)
-        logger.info("Temperature: %s", self.temperature)
-        logger.info("Options: %s", create_kwargs["options"])
-        logger.info("================================")
+        logger.debug(
+            "LLM request (ollama): model=%s messages=%d tools=%d temperature=%s options_keys=%s",
+            create_kwargs["model"],
+            len(create_kwargs["messages"]),
+            len(tools or []),
+            self.temperature,
+            sorted(create_kwargs["options"].keys()),
+        )
 
         stream = await self.client.chat(**create_kwargs)
         async for chunk in stream:
@@ -444,14 +445,15 @@ class VLLMStream:
         if tool_choice:
             create_kwargs["tool_choice"] = tool_choice
 
-        logger.info("=== LLM API REQUEST ===")
-        logger.info("Model: %s", create_kwargs["model"])
-        logger.info("Messages: %s", create_kwargs["messages"])
-        logger.info("Tools: %s", tools)
-        logger.info("Tool choice: %s", tool_choice)
-        logger.info("Temperature: %s", create_kwargs["temperature"])
-        logger.info("Extra body: %s", create_kwargs["extra_body"])
-        logger.info("=======================")
+        logger.debug(
+            "LLM request: model=%s messages=%d tools=%d tool_choice=%s temperature=%s extra_body_keys=%s",
+            create_kwargs["model"],
+            len(messages),
+            len(tools or []),
+            tool_choice,
+            create_kwargs["temperature"],
+            sorted(create_kwargs["extra_body"].keys()),
+        )
 
         stream = await self.client.chat.completions.create(**create_kwargs)
 

@@ -102,6 +102,7 @@ DEFAULT_LLM_THINKING = getenv("LLM_THINKING")
 # first message.
 # A word from the ASR can still interrupt the bot.
 UNINTERRUPTIBLE_BY_VAD_TIME_SEC = 3
+POST_TTS_SETTLE_SEC = float(getenv("POST_TTS_SETTLE_SEC", "0.05"))
 
 logger = getLogger(__name__)
 
@@ -783,7 +784,7 @@ class UnmuteHandler(AsyncStreamHandler):
         # Signal that the turn is over by adding an empty message.
         await self.add_chat_message_delta("", "user")
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(POST_TTS_SETTLE_SEC)
         await self.check_for_bot_goodbye()
         self.waiting_for_user_start_time = self.audio_received_sec()
 

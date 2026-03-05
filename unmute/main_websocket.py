@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 import numpy as np
 import requests
+import httpx
 import sphn
 from fastapi import (
     FastAPI,
@@ -120,6 +121,12 @@ Instrumentator().instrument(app).expose(app)
 PROFILE_ACTIVE = False
 _last_profile = None
 _current_profile = None
+DEBUG_RUNNING_TASKS = os.environ.get("DEBUG_RUNNING_TASKS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 ClientEventAdapter = TypeAdapter(
     Annotated[ora.ClientEvent, Field(discriminator="type")]
@@ -291,7 +298,8 @@ async def post_voices(file: UploadFile):
 
     Make sure the maximum file size is configured in uvicorn.
     """
-    name = clone_voice(file.file.read())
+    file_bytes = await file.read()
+    name = await asyncio.to_thread(clone_voice, file_bytes)
     return {"name": name}
 
 
@@ -315,7 +323,7 @@ async def post_voice_donation(
     metadata: str = Form(...),
 ):
     """Finish a voice donation."""
-    file_bytes = file.file.read()
+    file_bytes = await file.read()
 
     try:
         metadata_parsed = VoiceDonationSubmission(**json.loads(metadata))
@@ -328,7 +336,7 @@ async def post_voice_donation(
         ) from e
 
     try:
-        submit_voice_donation(metadata_parsed, file_bytes)
+        await asyncio.to_thread(submit_voice_donation, metadata_parsed, file_bytes)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -337,6 +345,16 @@ async def post_voice_donation(
 
 MEMORIES_DIR = "memories"
 os.makedirs(MEMORIES_DIR, exist_ok=True)
+
+
+def _load_json_file(file_path: str) -> Any:
+    with open(file_path, "r") as f:
+        return json.load(f)
+
+
+def _write_bytes_file(file_path: str, content: bytes) -> None:
+    with open(file_path, "wb") as f:
+        f.write(content)
 
 
 @app.get("/v1/memories/{voice_name}")
@@ -352,8 +370,7 @@ async def get_memory(voice_name: str, filename: str):
     file_path = os.path.join(MEMORIES_DIR, voice_name, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Memory not found")
-    with open(file_path, "r") as f:
-        return json.load(f)
+    return await asyncio.to_thread(_load_json_file, file_path)
 
 
 @app.post("/v1/memories/{voice_name}")
@@ -376,8 +393,7 @@ async def post_memory(voice_name: str, file: UploadFile = File(...)):
         content = await file.read()
         # verify it's valid json
         json.loads(content)
-        with open(file_path, "wb") as f:
-            f.write(content)
+        await asyncio.to_thread(_write_bytes_file, file_path, content)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON file")
 
@@ -390,12 +406,29 @@ async def proxy_jokes(request: Request):
     if not jokes_api_key:
         raise HTTPException(status_code=500, detail="BLAGUES_API_KEY is not set")
 
-    params = request.query_params
-    response = requests.get(
-        "https://www.blagues-api.fr/api/random",
-        params=params,
-        headers={"Authorization": f"Bearer {jokes_api_key}"},
-    )
+    params = dict(request.query_params)
+    timeout = httpx.Timeout(connect=2.0, read=6.0, write=6.0, pool=2.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            response = await client.get(
+                "https://www.blagues-api.fr/api/random",
+                params=params,
+                headers={"Authorization": f"Bearer {jokes_api_key}"},
+            )
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise HTTPException(
+                status_code=503, detail="Cannot connect to jokes provider"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise HTTPException(status_code=504, detail="Jokes provider timed out") from e
+        except httpx.HTTPStatusError as e:
+            detail = (
+                f"Jokes provider returned status {e.response.status_code}: "
+                f"{e.response.text}"
+            )
+            raise HTTPException(status_code=502, detail=detail) from e
+
     return JSONResponse(content=response.json())
 
 
@@ -419,19 +452,20 @@ async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
         )
 
     try:
-        response = requests.post(
-            f"{ha_url}/api/conversation/process",
-            headers={
-                "Authorization": f"Bearer {ha_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": request.text,
-                "language": "fr",
-                "agent_id": "conversation.home_assistant",
-            },
-            timeout=10,
-        )
+        timeout = httpx.Timeout(connect=2.0, read=10.0, write=10.0, pool=2.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{ha_url}/api/conversation/process",
+                headers={
+                    "Authorization": f"Bearer {ha_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "text": request.text,
+                    "language": "fr",
+                    "agent_id": "conversation.home_assistant",
+                },
+            )
 
         if response.status_code != 200:
             return JSONResponse(
@@ -449,9 +483,9 @@ async def proxy_homeassistant_conversation(request: HomeAssistantRequest):
             .get("speech", "Command sent"),
             "success": True,
         }
-    except requests.exceptions.ConnectionError:
+    except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Cannot connect to Home Assistant")
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Home Assistant request timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Home Assistant error: {str(e)}")
@@ -636,7 +670,8 @@ async def _run_route(websocket: WebSocket, handler: UnmuteHandler):
                 emit_loop(websocket, handler, emit_queue), name="emit_loop()"
             )
             tg.create_task(handler.quest_manager.wait(), name="quest_manager.wait()")
-            tg.create_task(debug_running_tasks(), name="debug_running_tasks()")
+            if DEBUG_RUNNING_TASKS:
+                tg.create_task(debug_running_tasks(), name="debug_running_tasks()")
     finally:
         await handler.cleanup()
         logger.info("websocket_route() finished")

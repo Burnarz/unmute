@@ -85,6 +85,25 @@ export const builtInTools = [
 
 let cachedMcpTools: any[] | null = null;
 let mcpToolsFetchPromise: Promise<any[]> | null = null;
+const DEFAULT_TOOL_TIMEOUT_MS = 7000;
+const MCP_TOOLS_TIMEOUT_MS = 5000;
+
+async function fetchWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+    timeoutMs: number = DEFAULT_TOOL_TIMEOUT_MS,
+) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: controller.signal,
+        });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 export async function fetchMcpTools(backendServerUrl: string): Promise<any[]> {
     if (cachedMcpTools !== null) {
@@ -98,7 +117,7 @@ export async function fetchMcpTools(backendServerUrl: string): Promise<any[]> {
     mcpToolsFetchPromise = (async (): Promise<any[]> => {
         try {
             const response = await fetch(`${backendServerUrl}/v1/mcp/tools`, {
-                signal: AbortSignal.timeout(5000),
+                signal: AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS),
             });
             
             if (!response.ok) {
@@ -129,19 +148,23 @@ export function getAllTools(mcpTools: any[] = []): any[] {
 export const tools = builtInTools;
 
 async function getWeather({ latitude, longitude }: { latitude: number, longitude: number }) {
-    const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`);
+    const response = await fetchWithTimeout(
+        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,wind_speed_10m&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m`
+    );
     const data = await response.json();
     return data.current;
 }
 
 async function getCoordinates({ city }: { city: string }) {
-    const response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}`);
+    const response = await fetchWithTimeout(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${city}`
+    );
     const data = await response.json();
     return data.results[0];
 }
 
 async function getJokes(backendServerUrl: string) {
-    const response = await fetch(`${backendServerUrl}/v1/proxy/jokes`);
+    const response = await fetchWithTimeout(`${backendServerUrl}/v1/proxy/jokes`);
 
     if (!response.ok) {
         const errorText = await response.text();
@@ -149,12 +172,12 @@ async function getJokes(backendServerUrl: string) {
     }
 
     const data = await response.json();
-    return `${data.joke} ${data.answer}`;
+    return `{"joke":${data.joke} ${data.answer}}`;
 }
 
 async function homeAssistant(backendServerUrl: string, {text}: {text: string}) {
     try {
-        const response = await fetch(`${backendServerUrl}/v1/proxy/homeassistant/conversation`, {
+        const response = await fetchWithTimeout(`${backendServerUrl}/v1/proxy/homeassistant/conversation`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -179,7 +202,7 @@ async function homeAssistant(backendServerUrl: string, {text}: {text: string}) {
 
 async function callMcpTool(backendServerUrl: string, name: string, toolArgs: Record<string, any>) {
     try {
-        const response = await fetch(`${backendServerUrl}/v1/mcp/call`, {
+        const response = await fetchWithTimeout(`${backendServerUrl}/v1/mcp/call`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",

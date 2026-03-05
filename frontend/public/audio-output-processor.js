@@ -196,11 +196,15 @@ class AudioOutputProcessor extends AudioWorkletProcessor {
         this.offsetInFirstBuffer + to_copy
       );
       output.set(subArray, out_idx);
-      anyAudio =
-        anyAudio ||
-        output.some(function (x) {
-          x > 1e-4 || x < -1e-4;
-        });
+      if (!anyAudio) {
+        for (let i = 0; i < subArray.length; i++) {
+          const x = subArray[i];
+          if (x > 1e-4 || x < -1e-4) {
+            anyAudio = true;
+            break;
+          }
+        }
+      }
       this.offsetInFirstBuffer += to_copy;
       out_idx += to_copy;
       if (this.offsetInFirstBuffer == first.length) {

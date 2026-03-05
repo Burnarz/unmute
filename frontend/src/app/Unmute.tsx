@@ -112,6 +112,10 @@ const Unmute = () => {
   );
 
   useEffect(() => {
+    if (process.env.NODE_ENV === "production") {
+      return;
+    }
+
     // Load Eruda script
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/eruda";
@@ -323,13 +327,15 @@ const Unmute = () => {
     } else if (data.type === "response.function_call_arguments.delta") {
       // We can notify the model that the function is going to take a while here
     } else if (data.type === "response.done") {
-      for (const call of data.response.output) {
-        if (call.type !== 'function_call') {
-          continue;
-        }
+      const functionCalls = data.response.output.filter(
+        (call: any) => call.type === "function_call",
+      );
+      if (functionCalls.length === 0) {
+        return;
+      }
 
+      for (const call of functionCalls) {
         const argsStr = String(call.arguments ?? "");
-
         setRawChatHistory((prev) => [
           ...prev,
           {
@@ -347,53 +353,81 @@ const Unmute = () => {
             ],
           },
         ]);
+      }
 
-        if (!backendServerUrl) {
-          console.warn("No backendServerUrl available for tool call");
-          continue;
-        }
+      if (!backendServerUrl) {
+        console.warn("No backendServerUrl available for tool call");
+        return;
+      }
 
-        handleToolCall(
-          { name: call.name ?? "", arguments: argsStr },
-          backendServerUrl,
-          (action, payload) => {
-            if (action === "trim_history") {
-              const interactions = Number(payload.interactions ?? 1);
-              trimLocalHistory(interactions);
-            }
+      void (async () => {
+        const settledResults = await Promise.allSettled(
+          functionCalls.map(async (call: any) => {
+            const argsStr = String(call.arguments ?? "");
+            const toolResult = await handleToolCall(
+              { name: call.name ?? "", arguments: argsStr },
+              backendServerUrl,
+              (action, payload) => {
+                if (action === "trim_history") {
+                  const interactions = Number(payload.interactions ?? 1);
+                  trimLocalHistory(interactions);
+                }
 
-            sendMessage(
-              JSON.stringify({
-                type: "unmute.control",
-                action,
-                data: payload,
-              }),
+                sendMessage(
+                  JSON.stringify({
+                    type: "unmute.control",
+                    action,
+                    data: payload,
+                  }),
+                );
+              },
             );
+
+            return {
+              callId: call.call_id as string,
+              resultStr: toolResult ? JSON.stringify(toolResult) : "",
+            };
+          }),
+        );
+
+        let outputsSent = 0;
+        for (const settled of settledResults) {
+          if (settled.status === "rejected") {
+            console.error("Tool call failed:", settled.reason);
+            continue;
           }
-        ).then(toolResult => {
-          const resultStr = toolResult ? JSON.stringify(toolResult) : "";
+
+          const { callId, resultStr } = settled.value;
           setRawChatHistory((prev) => [
             ...prev,
             {
               role: "tool",
-              tool_call_id: call.call_id,
+              tool_call_id: callId,
               content: resultStr,
             },
           ]);
-          const result = {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: call.call_id,
-              output: resultStr,
-            }
-          }
-          sendMessage(JSON.stringify(result));
-          sendMessage(JSON.stringify({
-            type: "response.create",
-          }));
-        });
-      }
+
+          sendMessage(
+            JSON.stringify({
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: callId,
+                output: resultStr,
+              },
+            }),
+          );
+          outputsSent += 1;
+        }
+
+        if (outputsSent > 0) {
+          sendMessage(
+            JSON.stringify({
+              type: "response.create",
+            }),
+          );
+        }
+      })();
     } else {
       const ignoredTypes = [
         "session.updated",

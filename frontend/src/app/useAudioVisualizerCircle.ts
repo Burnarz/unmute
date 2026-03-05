@@ -66,31 +66,18 @@ const drawCircleVisualization = (
   canvasCtx.closePath();
 
   if (filled) {
-    // Parse color to apply opacity
-    const tempCanvas = document.createElement("canvas");
-    const tempCtx = tempCanvas.getContext("2d");
-    if (tempCtx) {
-      tempCtx.fillStyle = color;
-      tempCtx.fillRect(0, 0, 1, 1);
-      const rgba = tempCtx.getImageData(0, 0, 1, 1).data;
-      canvasCtx.fillStyle = `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${opacity})`;
-    } else {
-      canvasCtx.fillStyle = color;
-    }
+    const previousAlpha = canvasCtx.globalAlpha;
+    canvasCtx.globalAlpha = opacity;
+    canvasCtx.fillStyle = color;
     canvasCtx.fill();
+    canvasCtx.globalAlpha = previousAlpha;
   } else {
-    const tempCanvas = document.createElement("canvas");
-    const tempCtx = tempCanvas.getContext("2d");
-    if (tempCtx) {
-      tempCtx.fillStyle = color;
-      tempCtx.fillRect(0, 0, 1, 1);
-      const rgba = tempCtx.getImageData(0, 0, 1, 1).data;
-      canvasCtx.strokeStyle = `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${opacity})`;
-    } else {
-      canvasCtx.strokeStyle = color;
-    }
+    const previousAlpha = canvasCtx.globalAlpha;
+    canvasCtx.globalAlpha = opacity;
+    canvasCtx.strokeStyle = color;
     canvasCtx.lineWidth = lineWidth;
     canvasCtx.stroke();
+    canvasCtx.globalAlpha = previousAlpha;
   }
 };
 
@@ -120,18 +107,11 @@ const drawPlayButton = (
 
   // Fill with color and opacity
   const color = getCSSVariable(colorName);
-  // Parse the CSS variable color to get RGB values
-  const tempCanvas = document.createElement("canvas");
-  const tempCtx = tempCanvas.getContext("2d");
-  if (!tempCtx) return;
-
-  tempCtx.fillStyle = color;
-  tempCtx.fillRect(0, 0, 1, 1);
-  const rgba = tempCtx.getImageData(0, 0, 1, 1).data;
-
-  // Apply opacity to the color
-  canvasCtx.fillStyle = `rgba(${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${opacity})`;
+  const previousAlpha = canvasCtx.globalAlpha;
+  canvasCtx.globalAlpha = opacity;
+  canvasCtx.fillStyle = color;
   canvasCtx.fill();
+  canvasCtx.globalAlpha = previousAlpha;
 };
 
 const getAnalyzerData = (
@@ -311,7 +291,7 @@ export const useAudioVisualizerCircle = (
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isConnected, animationProgress]);
+  }, [isConnected]);
 
   // Main drawing effect
   useEffect(() => {

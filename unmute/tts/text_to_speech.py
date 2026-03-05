@@ -1,4 +1,5 @@
 import asyncio
+import re
 import urllib.parse
 from logging import getLogger
 from typing import Annotated, Any, AsyncIterator, Callable, Literal, Union, cast
@@ -13,6 +14,7 @@ from unmute.exceptions import MissingServiceAtCapacity
 from unmute.kyutai_constants import (
     FRAME_TIME_SEC,
     HEADERS,
+    KYUTAI_LLM_MODEL,
     SAMPLE_RATE,
     TEXT_TO_SPEECH_PATH,
     TTS_SERVER,
@@ -25,6 +27,7 @@ from unmute.tts.voice_cloning import voice_embeddings_cache
 from unmute.websocket_utils import WebsocketState
 
 logger = getLogger(__name__)
+IS_GPT_OSS_MODEL = "gpt-oss" in (KYUTAI_LLM_MODEL or "").lower()
 
 
 class TTSClientTextMessage(BaseModel):
@@ -81,6 +84,39 @@ TTSMessage = Annotated[
 TTSMessageAdapter = TypeAdapter(TTSMessage)
 
 
+def _normalize_units_for_tts(text: str) -> str:
+    replacements: list[tuple[re.Pattern[str], str]] = [
+        # Handle both compact forms ("12km/h") and streamed standalone chunks ("km/h").
+        (re.compile(r"(?:(?<=\d)\s*|\b)km/h\b", flags=re.IGNORECASE), " kilometre par heure"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)m/s\b", flags=re.IGNORECASE), " metre par seconde"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)°\s*C\b", flags=re.IGNORECASE), " degre"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)°\s*F\b", flags=re.IGNORECASE), " degre fahrenheit"),
+        (re.compile(r"(?<=\d)\s*°\s*\b"), " degre"),
+        (re.compile(r"(?<=\d)\s*%", flags=re.IGNORECASE), " pourcent"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)kg\b", flags=re.IGNORECASE), " kilogramme"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)mg\b", flags=re.IGNORECASE), " milligramme"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)km\b", flags=re.IGNORECASE), " kilometre"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)cm\b", flags=re.IGNORECASE), " centimetre"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)mm\b", flags=re.IGNORECASE), " millimetre"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)ml\b", flags=re.IGNORECASE), " millilitre"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)ghz\b", flags=re.IGNORECASE), " gigahertz"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)mhz\b", flags=re.IGNORECASE), " megahertz"),
+        (re.compile(r"(?:(?<=\d)\s*|\b)khz\b", flags=re.IGNORECASE), " kilohertz"),
+        # Ambiguous short units: keep numeric guard only to avoid over-replacing normal words.
+        (re.compile(r"(?<=\d)\s*g\b", flags=re.IGNORECASE), " gramme"),
+        (re.compile(r"(?<=\d)\s*m\b", flags=re.IGNORECASE), " metre"),
+        (re.compile(r"(?<=\d)\s*l\b", flags=re.IGNORECASE), " litre"),
+        (re.compile(r"(?<=\d)\s*h\b", flags=re.IGNORECASE), " heure"),
+        (re.compile(r"(?<=\d)\s*min\b", flags=re.IGNORECASE), " minute"),
+        (re.compile(r"(?<=\d)\s*s\b", flags=re.IGNORECASE), " seconde"),
+    ]
+
+    for pattern, replacement in replacements:
+        text = pattern.sub(replacement, text)
+
+    return text
+
+
 def url_escape(value: object) -> str:
     return urllib.parse.quote(str(value), safe="")
 
@@ -104,6 +140,10 @@ def prepare_text_for_tts(text: str) -> str:
     text = text.replace("“", '"').replace("”", '"')
     text = text.replace("‘", "'").replace("’", "'")
     text = text.replace(" : ", " ")
+    if IS_GPT_OSS_MODEL:
+        text = text.replace("‑", " ")
+    text = _normalize_units_for_tts(text)
+    text = re.sub(r"\s+", " ", text).strip()
 
     return text
 

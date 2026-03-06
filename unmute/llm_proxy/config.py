@@ -35,7 +35,6 @@ class MCPExcludedTools:
     excluded_tools: set[str]
 
 
-
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -46,7 +45,6 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"Invalid config format for {path}: expected JSON object")
     return loaded
-
 
 
 def load_mcp_config(path: Path = DEFAULT_MCP_SERVERS_PATH) -> MCPConfig:
@@ -102,7 +100,6 @@ def load_mcp_config(path: Path = DEFAULT_MCP_SERVERS_PATH) -> MCPConfig:
         )
 
     return MCPConfig(servers=servers)
-
 
 
 def load_mcp_excluded_tools(

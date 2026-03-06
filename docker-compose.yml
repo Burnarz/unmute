@@ -44,6 +44,7 @@ services:
       - KYUTAI_LLM_URL=http://llm-proxy:80
       - KYUTAI_LLM_MODEL=${LLM_MODEL}
       - KYUTAI_LLM_API_KEY=ollama
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.3}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"

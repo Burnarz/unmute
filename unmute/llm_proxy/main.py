@@ -340,13 +340,16 @@ async def startup_event() -> None:
     _mcp_manager = MCPManager(cfg.servers, excl)
     await _mcp_manager.start()
 
+
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
     if _mcp_manager: await _mcp_manager.stop()
     if _http_client: await _http_client.aclose()
 
+
 @app.get("/")
 async def root(): return {"message": "Unmute LLM proxy running"}
+
 
 @app.get("/v1/models")
 async def models():
@@ -357,6 +360,7 @@ async def models():
     r = await c.get(f"{UPSTREAM_LLM_URL}/api/tags", headers=_upstream_headers())
     m = [{"id": x["name"], "object": "model", "owned_by": "ollama"} for x in r.json().get("models", [])]
     return JSONResponse(content={"object": "list", "data": m})
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -424,6 +428,7 @@ async def chat_completions(request: Request):
             messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
     
     raise HTTPException(status_code=400, detail="Max rounds reached")
+
 
 def _normalize_openai_response_from_ollama(o: dict[str, Any]) -> dict[str, Any]:
     rid = f"chatcmpl-{uuid.uuid4().hex}"

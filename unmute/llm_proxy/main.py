@@ -58,8 +58,6 @@ def _extract_message_text(message: dict[str, Any]) -> str:
     content = message.get("content")
     if isinstance(content, str):
         return content
-
-    # Some providers can return structured content.
     if isinstance(content, list):
         text_chunks: list[str] = []
         for item in content:
@@ -68,18 +66,7 @@ def _extract_message_text(message: dict[str, Any]) -> str:
                 if isinstance(text, str):
                     text_chunks.append(text)
         return "".join(text_chunks)
-
     return ""
-
-
-def _iter_text_chunks(text: str) -> list[str]:
-    if not text:
-        return []
-
-    # Preserve whitespace exactly. Splitting on spaces introduces regressions in TTS
-    # formatting (missing spaces/newlines) when we synthesize streaming chunks.
-    chunk_size = 24
-    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 
 def _sse_line(payload: dict[str, Any] | str) -> bytes:
@@ -99,83 +86,57 @@ def _build_tools(
     excluded_tools: set[str], incoming_tools: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     tools = [tool for tool in incoming_tools if isinstance(tool, dict)]
-
     for tool in LOCAL_TOOLS:
-        function = tool.get("function", {})
-        name = function.get("name")
+        name = tool.get("function", {}).get("name")
         if isinstance(name, str) and name not in excluded_tools:
             tools.append(tool)
-
     if _mcp_manager is not None:
         tools.extend(
             tool
             for tool in _mcp_manager.openai_tools
             if tool.get("function", {}).get("name") not in excluded_tools
         )
-
     dedup: dict[str, dict[str, Any]] = {}
     for tool in tools:
-        function = tool.get("function", {})
-        if not isinstance(function, dict):
-            continue
-        name = function.get("name")
+        name = tool.get("function", {}).get("name")
         if isinstance(name, str):
             dedup[name] = tool
-
     return list(dedup.values())
 
 
 def _current_thinking_mode() -> str:
     settings = get_runtime_settings()
     mode = str(settings.get("thinking_mode", "off")).strip().lower()
-    if mode in {"true", "on"}:
-        return "on"
-    if mode in {"false", "off"}:
-        return "off"
-    if mode in {"low", "medium", "high"}:
-        return mode
+    if mode in {"true", "on"}: return "on"
+    if mode in {"false", "off"}: return "off"
+    if mode in {"low", "medium", "high"}: return mode
     return "off"
 
 
 def _apply_openai_thinking(payload: dict[str, Any]) -> dict[str, Any]:
     mode = _current_thinking_mode()
     out = dict(payload)
-
     if mode == "off":
         out["reasoning"] = {"enabled": False}
         out["thinking"] = False
         out.pop("reasoning_effort", None)
-        return out
-
-    if mode == "on":
+    elif mode == "on":
         out["reasoning"] = {"enabled": True}
         out["thinking"] = True
         out.pop("reasoning_effort", None)
-        return out
-
-    # gpt-oss style levels
-    out["reasoning"] = {"effort": mode}
-    out["reasoning_effort"] = mode
-    out["thinking"] = mode
+    else:
+        out["reasoning"] = {"effort": mode}
+        out["reasoning_effort"] = mode
+        out["thinking"] = mode
     return out
-
-
-def _ollama_think_value() -> bool | str:
-    mode = _current_thinking_mode()
-    if mode == "off":
-        return False
-    if mode == "on":
-        return True
-    return mode
 
 
 def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for message in messages:
         role = message.get("role")
-        if not isinstance(role, str):
-            continue
-
+        if not isinstance(role, str): continue
+        
         mapped: dict[str, Any] = {
             "role": role,
             "content": _extract_message_text(message),
@@ -185,43 +146,24 @@ def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str,
             tool_calls = message.get("tool_calls")
             if isinstance(tool_calls, list):
                 converted_calls = []
-                for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-                    function = tool_call.get("function")
-                    if not isinstance(function, dict):
-                        continue
-                    tool_name = function.get("name")
-                    if not isinstance(tool_name, str):
-                        continue
-                    arguments_raw = function.get("arguments", "{}")
-                    if isinstance(arguments_raw, str):
-                        try:
-                            arguments = json.loads(arguments_raw)
-                        except json.JSONDecodeError:
-                            arguments = {}
-                    elif isinstance(arguments_raw, dict):
-                        arguments = arguments_raw
-                    else:
-                        arguments = {}
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-
-                    converted_calls.append(
-                        {
-                            "function": {
-                                "name": tool_name,
-                                "arguments": arguments,
-                            }
-                        }
-                    )
+                for tc in tool_calls:
+                    if not isinstance(tc, dict): continue
+                    fn = tc.get("function", {})
+                    name = fn.get("name")
+                    if not isinstance(name, str): continue
+                    args_raw = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    except:
+                        args = {}
+                    converted_calls.append({"function": {"name": name, "arguments": args}})
                 if converted_calls:
                     mapped["tool_calls"] = converted_calls
 
         if role == "tool":
-            name = message.get("name")
-            if isinstance(name, str) and name != "":
-                mapped["name"] = name
+            # Ollama expects 'tool' role for results.
+            # Some versions of Ollama don't use 'tool_call_id' but depend on order.
+            pass
 
         out.append(mapped)
     return out
@@ -232,642 +174,262 @@ def _openai_to_ollama_request(
     *,
     force_stream: bool | None = None,
     tools: list[dict[str, Any]] | None = None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    messages_raw = payload.get("messages", [])
-    if not isinstance(messages_raw, list):
-        messages_raw = []
-    messages = [m for m in messages_raw if isinstance(m, dict)]
+    if messages is None:
+        messages = [m for m in payload.get("messages", []) if isinstance(m, dict)]
 
     req: dict[str, Any] = {
         "model": payload.get("model"),
         "messages": _openai_to_ollama_messages(messages),
         "stream": payload.get("stream", False) if force_stream is None else force_stream,
-        "think": _ollama_think_value(),
     }
-
     if tools is None:
         tools = _get_tools_from_request(payload)
     if tools:
         req["tools"] = tools
-
     if "temperature" in payload:
         req["options"] = {"temperature": payload["temperature"]}
-
     return req
 
 
-def _ollama_message_to_openai(
-    ollama_message: dict[str, Any], *, response_id: str
-) -> dict[str, Any]:
-    content = ollama_message.get("content")
-    if not isinstance(content, str):
-        content = ""
-
-    message: dict[str, Any] = {
-        "role": "assistant",
-        "content": content,
-    }
-
+def _ollama_message_to_openai(ollama_message: dict[str, Any], *, response_id: str) -> dict[str, Any]:
+    content = ollama_message.get("content", "")
+    message: dict[str, Any] = {"role": "assistant", "content": content}
     tool_calls = ollama_message.get("tool_calls")
     if isinstance(tool_calls, list) and tool_calls:
         openai_tool_calls = []
-        for i, tool_call in enumerate(tool_calls):
-            if not isinstance(tool_call, dict):
-                continue
-            function = tool_call.get("function")
-            if not isinstance(function, dict):
-                continue
-            tool_name = function.get("name")
-            if not isinstance(tool_name, str):
-                continue
-            arguments = function.get("arguments", {})
-            if not isinstance(arguments, dict):
-                arguments = {}
-            openai_tool_calls.append(
-                {
-                    "id": f"{response_id}-tool-{i}",
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": json.dumps(arguments, ensure_ascii=False),
-                    },
-                }
-            )
-
+        for i, tc in enumerate(tool_calls):
+            fn = tc.get("function", {})
+            openai_tool_calls.append({
+                "id": f"{response_id}-tool-{i}",
+                "type": "function",
+                "function": {
+                    "name": fn.get("name"),
+                    "arguments": json.dumps(fn.get("arguments", {}), ensure_ascii=False),
+                },
+            })
         if openai_tool_calls:
             message["tool_calls"] = openai_tool_calls
-
     return message
-
-
-def _normalize_openai_response_from_ollama(ollama_resp: dict[str, Any]) -> dict[str, Any]:
-    model = str(ollama_resp.get("model", "unknown"))
-    created_iso = ollama_resp.get("created_at")
-    if isinstance(created_iso, str):
-        try:
-            created = int(datetime.fromisoformat(created_iso.replace("Z", "+00:00")).timestamp())
-        except ValueError:
-            created = int(time.time())
-    else:
-        created = int(time.time())
-
-    response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    ollama_message = ollama_resp.get("message")
-    if not isinstance(ollama_message, dict):
-        ollama_message = {"role": "assistant", "content": ""}
-    openai_message = _ollama_message_to_openai(ollama_message, response_id=response_id)
-
-    finish_reason = "stop"
-    if openai_message.get("tool_calls"):
-        finish_reason = "tool_calls"
-
-    usage: dict[str, int] = {}
-    prompt_tokens = ollama_resp.get("prompt_eval_count")
-    completion_tokens = ollama_resp.get("eval_count")
-    if isinstance(prompt_tokens, int):
-        usage["prompt_tokens"] = prompt_tokens
-    if isinstance(completion_tokens, int):
-        usage["completion_tokens"] = completion_tokens
-    if usage:
-        usage["total_tokens"] = usage.get("prompt_tokens", 0) + usage.get(
-            "completion_tokens", 0
-        )
-
-    out: dict[str, Any] = {
-        "id": response_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": openai_message,
-                "finish_reason": finish_reason,
-            }
-        ],
-    }
-    if usage:
-        out["usage"] = usage
-    return out
-
-
-async def _call_upstream(payload: dict[str, Any]) -> dict[str, Any]:
-    client = await _http()
-    if UPSTREAM_API_STYLE == "openai":
-        openai_payload = _apply_openai_thinking(payload)
-        response = await client.post(
-            f"{UPSTREAM_LLM_URL}/v1/chat/completions",
-            headers=_upstream_headers(),
-            json=openai_payload,
-        )
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-
-        parsed = response.json()
-        if not isinstance(parsed, dict):
-            raise HTTPException(status_code=502, detail="Invalid upstream response format")
-        return parsed
-
-    if UPSTREAM_API_STYLE == "ollama":
-        ollama_payload = _openai_to_ollama_request(payload, force_stream=False)
-        response = await client.post(
-            f"{UPSTREAM_LLM_URL}/api/chat",
-            headers=_upstream_headers(),
-            json=ollama_payload,
-        )
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        parsed = response.json()
-        if not isinstance(parsed, dict):
-            raise HTTPException(status_code=502, detail="Invalid upstream response format")
-        return _normalize_openai_response_from_ollama(parsed)
-
-    raise HTTPException(
-        status_code=500,
-        detail=f"Unsupported UPSTREAM_API_STYLE={UPSTREAM_API_STYLE!r}",
-    )
 
 
 async def _tool_result(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     handler = LOCAL_TOOL_HANDLERS.get(tool_name)
-    if handler is not None:
-        try:
-            return await handler(arguments)
-        except Exception as exc:
-            return {"error": f"Local tool execution failed: {exc}"}
-
-    if _mcp_manager is not None:
-        try:
-            return await _mcp_manager.call(tool_name, arguments)
-        except Exception as exc:
-            return {"error": f"MCP tool execution failed: {exc}"}
-
+    if handler:
+        try: return await handler(arguments)
+        except Exception as e: return {"error": f"Local tool failed: {e}"}
+    if _mcp_manager:
+        try: return await _mcp_manager.call(tool_name, arguments)
+        except Exception as e: return {"error": f"MCP tool failed: {e}"}
     return {"error": f"Unknown tool: {tool_name}"}
-
-
-async def _resolve_tool_calls(
-    body: dict[str, Any],
-    tools: list[dict[str, Any]],
-) -> dict[str, Any]:
-    messages_raw = body.get("messages")
-    if not isinstance(messages_raw, list):
-        raise HTTPException(status_code=400, detail="Expected list in 'messages'")
-
-    messages: list[dict[str, Any]] = [m for m in messages_raw if isinstance(m, dict)]
-
-    if not tools:
-        passthrough_body = {**body, "stream": False}
-        return await _call_upstream(passthrough_body)
-
-    for _ in range(MAX_TOOL_ROUNDS):
-        request_payload = {
-            **body,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "stream": False,
-        }
-
-        result = await _call_upstream(request_payload)
-        choices = result.get("choices")
-        if not isinstance(choices, list) or len(choices) == 0:
-            return result
-
-        first_choice = choices[0]
-        if not isinstance(first_choice, dict):
-            return result
-
-        assistant_message = first_choice.get("message")
-        if not isinstance(assistant_message, dict):
-            return result
-
-        messages.append(assistant_message)
-        tool_calls = assistant_message.get("tool_calls")
-        if not isinstance(tool_calls, list) or len(tool_calls) == 0:
-            return result
-
-        for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-
-            tool_call_id = tool_call.get("id")
-            function = tool_call.get("function")
-            if not isinstance(tool_call_id, str) or not isinstance(function, dict):
-                continue
-
-            tool_name = function.get("name")
-            args_raw = function.get("arguments", "{}")
-            if not isinstance(tool_name, str):
-                continue
-
-            try:
-                parsed_args = json.loads(args_raw) if isinstance(args_raw, str) else {}
-                if not isinstance(parsed_args, dict):
-                    parsed_args = {}
-            except json.JSONDecodeError:
-                parsed_args = {}
-
-            tool_output = await _tool_result(tool_name, parsed_args)
-            messages.append(
-                {
-                    "role": "tool",
-                    "name": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "content": json.dumps(tool_output, ensure_ascii=False),
-                }
-            )
-
-    raise HTTPException(status_code=400, detail="Maximum tool rounds reached")
 
 
 async def _resolve_tool_calls_streaming(
     body: dict[str, Any],
     tools: list[dict[str, Any]],
 ) -> AsyncIterator[bytes]:
-    messages_raw = body.get("messages", [])
-    if not isinstance(messages_raw, list):
-        raise HTTPException(status_code=400, detail="Expected list in 'messages'")
-
-    messages: list[dict[str, Any]] = [m for m in messages_raw if isinstance(m, dict)]
-
+    messages: list[dict[str, Any]] = [m for m in body.get("messages", []) if isinstance(m, dict)]
     client = await _http()
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
-    model = str(body.get("model", "unknown"))
+    created, model = int(time.time()), str(body.get("model", "unknown"))
+    role_emitted = False
 
-    for _ in range(MAX_TOOL_ROUNDS):
-        # Determine upstream request based on style
+    for round_idx in range(MAX_TOOL_ROUNDS):
+        logger.info("Starting tool round %d", round_idx)
         if UPSTREAM_API_STYLE == "openai":
-            upstream_url = f"{UPSTREAM_LLM_URL}/v1/chat/completions"
+            url = f"{UPSTREAM_LLM_URL}/v1/chat/completions"
             payload = _apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": True})
-        elif UPSTREAM_API_STYLE == "ollama":
-            upstream_url = f"{UPSTREAM_LLM_URL}/api/chat"
-            payload = _openai_to_ollama_request(body, force_stream=True, tools=tools)
-            # Update messages in the payload to include current history
-            payload["messages"] = _openai_to_ollama_messages(messages)
         else:
-            raise HTTPException(status_code=500, detail=f"Unsupported UPSTREAM_API_STYLE={UPSTREAM_API_STYLE}")
+            url = f"{UPSTREAM_LLM_URL}/api/chat"
+            payload = _openai_to_ollama_request(body, force_stream=True, tools=tools, messages=messages)
 
-        async with client.stream(
-            "POST",
-            upstream_url,
-            headers=_upstream_headers(),
-            json=payload,
-            timeout=120,
-        ) as response:
+        async with client.stream("POST", url, headers=_upstream_headers(), json=payload, timeout=120) as response:
             if response.status_code >= 400:
-                error_payload = (await response.aread()).decode("utf-8", errors="replace")
-                raise HTTPException(status_code=response.status_code, detail=error_payload)
+                err = (await response.aread()).decode("utf-8", errors="replace")
+                logger.error("Upstream error: %s", err)
+                raise HTTPException(status_code=response.status_code, detail=err)
 
-            determined_type = False
-            is_tool_call = False
+            current_tcs: dict[int, dict[str, Any]] = {}
+            full_content: list[str] = []
+            loop_finish_reason = None
             
-            # Accumulators for tool calls
-            current_tool_calls: dict[int, dict[str, Any]] = {}
-            full_content_acc = []
-
-            # First chunk role emission (only on the very last turn that yields to client)
-            role_emitted = False
-
             async for line in response.aiter_lines():
-                if not line or line.strip() == "":
-                    continue
+                line = line.strip()
+                if not line: continue
+                chunk_data = line[6:] if line.startswith("data: ") else line
+                if not chunk_data or chunk_data == "[DONE]": break
                 
-                # Handle SSE prefix if OpenAI
-                chunk_data = line.strip()
-                if chunk_data.startswith("data: "):
-                    chunk_data = chunk_data[len("data: "):]
-                
-                if chunk_data == "[DONE]":
-                    break
-                
-                try:
-                    parsed = json.loads(chunk_data)
-                except json.JSONDecodeError:
-                    continue
+                try: parsed = json.loads(chunk_data)
+                except: continue
 
-                # Normalize chunk based on source
-                delta: dict[str, Any] = {}
-                finish_reason = None
-                
+                delta, fr = {}, None
                 if UPSTREAM_API_STYLE == "openai":
                     choices = parsed.get("choices", [])
                     if choices:
                         delta = choices[0].get("delta", {})
-                        finish_reason = choices[0].get("finish_reason")
-                else:  # ollama
+                        fr = choices[0].get("finish_reason")
+                else:
                     msg = parsed.get("message", {})
                     delta = {"content": msg.get("content", ""), "tool_calls": msg.get("tool_calls")}
                     if parsed.get("done"):
-                        finish_reason = "stop" if not msg.get("tool_calls") else "tool_calls"
+                        fr = "tool_calls" if (msg.get("tool_calls") or current_tcs) else "stop"
 
-                # Check if we are starting a tool call or content
-                if not determined_type:
-                    if delta.get("tool_calls") or (UPSTREAM_API_STYLE == "openai" and "tool_calls" in delta):
-                        is_tool_call = True
-                    elif delta.get("content") or "content" in delta:
-                        is_tool_call = False
-                    
-                    if delta.get("tool_calls") or delta.get("content") or finish_reason:
-                        determined_type = True
-
-                if is_tool_call:
-                    # Accumulate tool calls for later execution
-                    tcs = delta.get("tool_calls", [])
-                    if tcs:
-                        for tc in tcs:
-                            idx = tc.get("index", 0)
-                            if idx not in current_tool_calls:
-                                current_tool_calls[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
-                            
-                            if tc.get("id"):
-                                current_tool_calls[idx]["id"] = tc["id"]
-                            
-                            fn = tc.get("function", {})
-                            if fn.get("name"):
-                                current_tool_calls[idx]["function"]["name"] += fn["name"]
-                            
-                            args_delta = fn.get("arguments")
-                            if args_delta:
-                                if isinstance(args_delta, dict):
-                                    # If it's a dict, it's likely the full arguments object
-                                    args_delta = json.dumps(args_delta, ensure_ascii=False)
-                                
-                                current_tool_calls[idx]["function"]["arguments"] += args_delta
-                else:
-                    # This is final content, stream it to client!
+                content_piece = delta.get("content", "")
+                if content_piece:
                     if not role_emitted:
-                        yield _sse_line({
-                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
-                            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-                        })
+                        yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
                         role_emitted = True
-                    
-                    content_piece = delta.get("content", "")
-                    if content_piece:
-                        full_content_acc.append(content_piece)
-                        yield _sse_line({
-                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
-                            "choices": [{"index": 0, "delta": {"content": content_piece}, "finish_reason": None}]
-                        })
-                    
-                    if finish_reason:
-                        yield _sse_line({
-                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
-                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]
-                        })
-                        yield _sse_line("[DONE]")
-                        return # Exit the entire generator, we are done!
+                    full_content.append(content_piece)
+                    yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                     "choices": [{"index": 0, "delta": {"content": content_piece}, "finish_reason": None}]})
 
-            # If we finished the stream and it was a tool call, process and loop
-            if is_tool_call:
-                tool_calls_list = [v for k, v in sorted(current_tool_calls.items())]
-                messages.append({"role": "assistant", "tool_calls": tool_calls_list})
-                
-                for tc in tool_calls_list:
-                    tool_name = tc["function"]["name"]
-                    try:
-                        args = json.loads(tc["function"]["arguments"])
-                    except:
-                        args = {}
-                    
-                    tool_output = await _tool_result(tool_name, args)
-                    messages.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "tool_call_id": tc["id"],
-                        "content": json.dumps(tool_output, ensure_ascii=False)
-                    })
-                # Loop continues to next round
+                tcs = delta.get("tool_calls", [])
+                if tcs:
+                    for tc in tcs:
+                        idx = tc.get("index", 0)
+                        if idx not in current_tcs:
+                            current_tcs[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
+                        if tc.get("id"): current_tcs[idx]["id"] = tc["id"]
+                        fn = tc.get("function", {})
+                        if fn.get("name"): current_tcs[idx]["function"]["name"] += fn["name"]
+                        args = fn.get("arguments", "")
+                        if args:
+                            current_tcs[idx]["function"]["arguments"] += (json.dumps(args) if isinstance(args, dict) else args)
+
+                if fr:
+                    loop_finish_reason = fr
+                    # Do not return yet, let the loop finish to ensure we saw everything
+                    if fr == "tool_calls": break
+
+            if current_tcs:
+                logger.info("Round %d found %d tool calls", round_idx, len(current_tcs))
+                tc_list = [v for k, v in sorted(current_tcs.items())]
+                messages.append({"role": "assistant", "content": "".join(full_content), "tool_calls": tc_list})
+                for tc in tc_list:
+                    name = tc["function"]["name"]
+                    try: args = json.loads(tc["function"]["arguments"])
+                    except: args = {}
+                    logger.info("Executing tool: %s", name)
+                    res = await _tool_result(name, args)
+                    messages.append({"role": "tool", "name": name, "tool_call_id": tc.get("id") or f"tc-{uuid.uuid4().hex}", 
+                                     "content": json.dumps(res, ensure_ascii=False)})
+            elif loop_finish_reason == "stop" or not full_content:
+                logger.info("Round %d finished with stop", round_idx)
+                yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+                yield _sse_line("[DONE]")
+                return
             else:
-                # Fallback if stream ended without finish_reason
+                # Content was streamed but no more tools, we're likely done
+                logger.info("Round %d finished after streaming content", round_idx)
+                yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
                 yield _sse_line("[DONE]")
                 return
 
-    raise HTTPException(status_code=400, detail="Maximum tool rounds reached")
-
-
-async def _stream_ollama_passthrough(body: dict[str, Any]) -> AsyncIterator[bytes]:
-    client = await _http()
-    payload = _openai_to_ollama_request(body, force_stream=True)
-
-    response_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
-    model = str(body.get("model", "unknown"))
-
-    role_chunk = {
-        "id": response_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-    }
-    yield _sse_line(role_chunk)
-
-    async with client.stream(
-        "POST",
-        f"{UPSTREAM_LLM_URL}/api/chat",
-        headers=_upstream_headers(),
-        json=payload,
-        timeout=120,
-    ) as response:
-        if response.status_code >= 400:
-            error_payload = (await response.aread()).decode("utf-8", errors="replace")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_payload,
-            )
-
-        async for line in response.aiter_lines():
-            if line is None:
-                continue
-            stripped = line.strip()
-            if stripped == "":
-                continue
-
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-
-            if "error" in parsed:
-                raise HTTPException(status_code=502, detail=str(parsed["error"]))
-
-            message = parsed.get("message")
-            if isinstance(message, dict):
-                piece = message.get("content")
-                if isinstance(piece, str) and piece != "":
-                    payload_chunk = {
-                        "id": response_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": str(parsed.get("model", model)),
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": piece},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield _sse_line(payload_chunk)
-
-            done = parsed.get("done")
-            if isinstance(done, bool) and done:
-                end_payload = {
-                    "id": response_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": str(parsed.get("model", model)),
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                }
-                yield _sse_line(end_payload)
-                yield _sse_line("[DONE]")
-                return
-
-    end_payload = {
-        "id": response_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    }
-    yield _sse_line(end_payload)
-    yield _sse_line("[DONE]")
+    raise HTTPException(status_code=400, detail="Max tool rounds reached")
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
     global _mcp_manager
-    excluded = load_mcp_excluded_tools().excluded_tools
-    mcp_config = load_mcp_config()
-    _mcp_manager = MCPManager(mcp_config.servers, excluded)
+    cfg = load_mcp_config()
+    excl = load_mcp_excluded_tools().excluded_tools
+    _mcp_manager = MCPManager(cfg.servers, excl)
     await _mcp_manager.start()
-
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
-    if _mcp_manager is not None:
-        await _mcp_manager.stop()
-
-    global _http_client
-    if _http_client is not None:
-        await _http_client.aclose()
-        _http_client = None
-
+    if _mcp_manager: await _mcp_manager.stop()
+    if _http_client: await _http_client.aclose()
 
 @app.get("/")
-async def root() -> dict[str, str]:
-    return {"message": "Unmute LLM proxy running"}
-
+async def root(): return {"message": "Unmute LLM proxy running"}
 
 @app.get("/v1/models")
-async def models() -> JSONResponse:
-    client = await _http()
+async def models():
+    c = await _http()
     if UPSTREAM_API_STYLE == "openai":
-        response = await client.get(
-            f"{UPSTREAM_LLM_URL}/v1/models",
-            headers=_upstream_headers(),
-        )
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        return JSONResponse(content=response.json())
-
-    if UPSTREAM_API_STYLE == "ollama":
-        response = await client.get(
-            f"{UPSTREAM_LLM_URL}/api/tags",
-            headers=_upstream_headers(),
-        )
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        parsed = response.json()
-        models_raw = parsed.get("models", []) if isinstance(parsed, dict) else []
-        data = []
-        if isinstance(models_raw, list):
-            for model in models_raw:
-                if not isinstance(model, dict):
-                    continue
-                name = model.get("name")
-                if isinstance(name, str):
-                    data.append({"id": name, "object": "model", "owned_by": "ollama"})
-        return JSONResponse(content={"object": "list", "data": data})
-
-    raise HTTPException(
-        status_code=500,
-        detail=f"Unsupported UPSTREAM_API_STYLE={UPSTREAM_API_STYLE!r}",
-    )
-
+        r = await c.get(f"{UPSTREAM_LLM_URL}/v1/models", headers=_upstream_headers())
+        return JSONResponse(content=r.json())
+    r = await c.get(f"{UPSTREAM_LLM_URL}/api/tags", headers=_upstream_headers())
+    m = [{"id": x["name"], "object": "model", "owned_by": "ollama"} for x in r.json().get("models", [])]
+    return JSONResponse(content={"object": "list", "data": m})
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Invalid request body")
+    stream = bool(body.get("stream", False))
+    tools = _build_tools(load_mcp_excluded_tools().excluded_tools, _get_tools_from_request(body))
 
-    requested_stream = bool(body.get("stream", False))
-
-    excluded = load_mcp_excluded_tools().excluded_tools
-    incoming_tools = _get_tools_from_request(body)
-    tools = _build_tools(excluded, incoming_tools)
-
-    # Lowest-latency path: pure passthrough when there is no tool-calling work to do.
-    if (not TOOL_CALLING_ENABLED) or not tools:
-        if requested_stream:
+    if not TOOL_CALLING_ENABLED or not tools:
+        if stream:
+            c = await _http()
             if UPSTREAM_API_STYLE == "openai":
-                client = await _http()
-                openai_body = _apply_openai_thinking(body)
+                async def ps():
+                    async with c.stream("POST", f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), 
+                                        json=_apply_openai_thinking(body), timeout=120) as r:
+                        async for chunk in r.aiter_bytes(): yield chunk
+                return StreamingResponse(ps(), media_type="text/event-stream")
+            
+            async def ops():
+                payload = _openai_to_ollama_request(body, force_stream=True)
+                async with c.stream("POST", f"{UPSTREAM_LLM_URL}/api/chat", headers=_upstream_headers(), json=payload, timeout=120) as r:
+                    rid, created, model = f"chatcmpl-{uuid.uuid4().hex}", int(time.time()), str(body.get("model", "unknown"))
+                    yield _sse_line({"id": rid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+                    async for line in r.aiter_lines():
+                        if not line.strip(): continue
+                        p = json.loads(line)
+                        if "message" in p and p["message"].get("content"):
+                            yield _sse_line({"id": rid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"content": p["message"]["content"]}, "finish_reason": None}]})
+                        if p.get("done"):
+                            yield _sse_line({"id": rid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+                            yield _sse_line("[DONE]")
+            return StreamingResponse(ops(), media_type="text/event-stream")
+        
+        # Non-streaming passthrough
+        if UPSTREAM_API_STYLE == "openai":
+            c = await _http()
+            r = await c.post(f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), json=_apply_openai_thinking(body))
+            return JSONResponse(content=r.json())
+        else:
+            c = await _http()
+            r = await c.post(f"{UPSTREAM_LLM_URL}/api/chat", headers=_upstream_headers(), json=_openai_to_ollama_request(body, force_stream=False))
+            return JSONResponse(content=_normalize_openai_response_from_ollama(r.json()))
 
-                async def stream_passthrough() -> AsyncIterator[bytes]:
-                    async with client.stream(
-                        "POST",
-                        f"{UPSTREAM_LLM_URL}/v1/chat/completions",
-                        headers=_upstream_headers(),
-                        json=openai_body,
-                        timeout=120,
-                    ) as response:
-                        if response.status_code >= 400:
-                            error_payload = (await response.aread()).decode(
-                                "utf-8", errors="replace"
-                            )
-                            raise HTTPException(
-                                status_code=response.status_code,
-                                detail=error_payload,
-                            )
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
+    if stream:
+        return StreamingResponse(_resolve_tool_calls_streaming(body, tools), media_type="text/event-stream")
+    
+    # Non-streaming with tools
+    messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
+    for _ in range(MAX_TOOL_ROUNDS):
+        res = await (await _http()).post(f"{UPSTREAM_LLM_URL}/v1/chat/completions" if UPSTREAM_API_STYLE == "openai" else f"{UPSTREAM_LLM_URL}/api/chat",
+                                         headers=_upstream_headers(),
+                                         json=_apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": False}) if UPSTREAM_API_STYLE == "openai" else _openai_to_ollama_request(body, force_stream=False, tools=tools, messages=messages))
+        
+        parsed = res.json()
+        if UPSTREAM_API_STYLE == "ollama": parsed = _normalize_openai_response_from_ollama(parsed)
+        
+        msg = parsed["choices"][0]["message"]
+        messages.append(msg)
+        if not msg.get("tool_calls"): return JSONResponse(content=parsed)
+        
+        for tc in msg["tool_calls"]:
+            name = tc["function"]["name"]
+            try: args = json.loads(tc["function"]["arguments"])
+            except: args = {}
+            out = await _tool_result(name, args)
+            messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
+    
+    raise HTTPException(status_code=400, detail="Max rounds reached")
 
-                return StreamingResponse(
-                    stream_passthrough(),
-                    media_type="text/event-stream",
-                )
-
-            if UPSTREAM_API_STYLE == "ollama":
-                return StreamingResponse(
-                    _stream_ollama_passthrough(body),
-                    media_type="text/event-stream",
-                )
-
-            raise HTTPException(
-                status_code=500,
-                detail=f"Unsupported UPSTREAM_API_STYLE={UPSTREAM_API_STYLE!r}",
-            )
-
-        result = await _call_upstream(body)
-        return JSONResponse(content=result)
-
-    if requested_stream:
-        return StreamingResponse(
-            _resolve_tool_calls_streaming(body, tools),
-            media_type="text/event-stream",
-        )
-
-    final_response = await _resolve_tool_calls(body, tools)
-    return JSONResponse(content=final_response)
+def _normalize_openai_response_from_ollama(o: dict[str, Any]) -> dict[str, Any]:
+    rid = f"chatcmpl-{uuid.uuid4().hex}"
+    m = _ollama_message_to_openai(o.get("message", {}), response_id=rid)
+    return {
+        "id": rid, "object": "chat.completion", "created": int(time.time()), "model": o.get("model", "unknown"),
+        "choices": [{"index": 0, "message": m, "finish_reason": "tool_calls" if m.get("tool_calls") else "stop"}],
+        "usage": {"prompt_tokens": o.get("prompt_eval_count", 0), "completion_tokens": o.get("eval_count", 0), "total_tokens": o.get("prompt_eval_count", 0) + o.get("eval_count", 0)}
+    }

@@ -1,19 +1,20 @@
-# See NOTE comments for places to modify.
 services:
   traefik:
-    image: traefik:v3.3.1
+    image: traefik:latest
     command:
-      # Swarm provider configuration
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-
-      # This is set up for HTTP. If you want HTTPS support for production, use Docker Swarm
-      # (check out swarm-deploy.yml) or ask ChatGPT to modify this file for you.
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirection HTTP vers HTTPS
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./certs:/certs:ro"
 
   frontend:
     image: unmute-frontend:latest
@@ -25,9 +26,10 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
-      - "traefik.http.routers.frontend.priority=10" # lowest priority
+      - "traefik.http.routers.frontend.priority=10"
 
   backend:
     image: unmute-backend:latest
@@ -39,18 +41,56 @@ services:
     environment:
       - KYUTAI_STT_URL=ws://stt:8080
       - KYUTAI_TTS_URL=ws://tts:8080
-      - KYUTAI_LLM_URL=http://llm:8000
-      - NEWSAPI_API_KEY=$NEWSAPI_API_KEY
+      - KYUTAI_LLM_URL=http://llm-proxy:80
+      - KYUTAI_LLM_MODEL=${LLM_MODEL}
+      - KYUTAI_LLM_API_KEY=ollama
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.backend.middlewares=strip-api"
       - "traefik.http.middlewares.strip-api.replacepathregex.regex=^/api/(.*)"
       - "traefik.http.middlewares.strip-api.replacepathregex.replacement=/$$1"
-      - "traefik.http.routers.backend.entrypoints=web"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
       - "traefik.http.services.backend.loadbalancer.server.port=80"
-      - "traefik.http.routers.backend.priority=100" # higher priority than frontend
+      - "traefik.http.routers.backend.priority=100"
       - "prometheus-port=80"
+
+  llm-proxy:
+    image: unmute-backend:latest
+    build:
+      context: ./
+      target: hot-reloading
+    command:
+      [
+        "uv",
+        "run",
+        "--no-dev",
+        "uvicorn",
+        "unmute.llm_proxy.main:app",
+        "--reload",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "80",
+      ]
+    volumes:
+      - ./unmute:/app/unmute
+      - ./mcp-servers.json:/app/mcp-servers.json
+      - ./mcp-tools-excluded.json:/app/mcp-tools-excluded.json
+      - ${JARVIS_SHARE_PATH}:/app/partage
+      - ${GOOGLE_TOKENS_PATH}:/app/GoogleTokens
+      - ${MEMORY_FOLDER}:/app/memory
+    environment:
+      - UPSTREAM_LLM_URL=${LLM_URL}
+      - UPSTREAM_LLM_API_KEY=ollama
+      - TOOL_CALLING_ENABLED=1
+      - BLAGUES_API_KEY=${BLAGUES_API_KEY}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
+      - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}
+      - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   tts:
     image: moshi-server:latest
@@ -59,7 +99,7 @@ services:
       context: services/moshi-server
       dockerfile: public.Dockerfile
     environment:
-      - HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN
+      - HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
     volumes:
       - ./volumes/hf-cache:/root/.cache/huggingface
       - ./volumes/cargo-registry-tts:/root/.cargo/registry
@@ -82,7 +122,7 @@ services:
       context: services/moshi-server
       dockerfile: public.Dockerfile
     environment:
-      - HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN
+      - HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
     volumes:
       - ./volumes/hf-cache:/root/.cache/huggingface
       - ./volumes/cargo-registry-stt:/root/.cargo/registry
@@ -90,34 +130,6 @@ services:
       - ./volumes/uv-cache:/root/.cache/uv
       - /tmp/models/:/models
       - ./volumes/stt-logs:/tmp/unmute_logs
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  llm:
-    image: vllm/vllm-openai:v0.11.0
-    command:
-      [
-        # NOTE: Change the LLM here if you want.
-        # (caution: gemma-3-1b-it also exists but it's slow on vLLM: https://github.com/vllm-project/vllm/issues/19575)
-        "--model=meta-llama/Llama-3.2-1B-Instruct",
-        # NOTE: You can adapt this based on your GPU memory.
-        # A higher value takes more memory but supports longer conversations.
-        "--max-model-len=1536",
-        "--dtype=bfloat16",
-        # NOTE: Change this based on your GPU memory.
-        # A higher value can make inference faster.
-        "--gpu-memory-utilization=0.4",
-      ]
-    volumes:
-      - ./volumes/hf-cache:/root/.cache/huggingface
-      - ./volumes/vllm-cache:/root/.cache/vllm
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN
     deploy:
       resources:
         reservations:

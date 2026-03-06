@@ -1,0 +1,25 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "enabled": true,
+      "command": [
+        "mcp-server-filesystem",
+        "/app/partage"
+      ],
+      "install": ["npm", "install", "-g", "@modelcontextprotocol/server-filesystem"],
+      "env": {},
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 20
+    },
+    {
+      "name": "brave-search",
+      "enabled": true,
+      "command": ["brave-search-mcp-server"],
+      "install": ["npm", "install", "-g", "@brave/brave-search-mcp-server"],
+      "env": {},
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 15
+    }
+  ]
+}

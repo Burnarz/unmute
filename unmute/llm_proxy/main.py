@@ -16,7 +16,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from unmute.llm_proxy.config import load_mcp_config, load_mcp_excluded_tools
 from unmute.llm_proxy.mcp_client import MCPManager
-from unmute.tools import LOCAL_TOOL_HANDLERS, LOCAL_TOOLS
+from unmute.tools import LOCAL_TOOL_HANDLERS, LOCAL_TOOLS, get_runtime_settings
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -125,6 +125,50 @@ def _build_tools(
     return list(dedup.values())
 
 
+def _current_thinking_mode() -> str:
+    settings = get_runtime_settings()
+    mode = str(settings.get("thinking_mode", "off")).strip().lower()
+    if mode in {"true", "on"}:
+        return "on"
+    if mode in {"false", "off"}:
+        return "off"
+    if mode in {"low", "medium", "high"}:
+        return mode
+    return "off"
+
+
+def _apply_openai_thinking(payload: dict[str, Any]) -> dict[str, Any]:
+    mode = _current_thinking_mode()
+    out = dict(payload)
+
+    if mode == "off":
+        out["reasoning"] = {"enabled": False}
+        out["thinking"] = False
+        out.pop("reasoning_effort", None)
+        return out
+
+    if mode == "on":
+        out["reasoning"] = {"enabled": True}
+        out["thinking"] = True
+        out.pop("reasoning_effort", None)
+        return out
+
+    # gpt-oss style levels
+    out["reasoning"] = {"effort": mode}
+    out["reasoning_effort"] = mode
+    out["thinking"] = mode
+    return out
+
+
+def _ollama_think_value() -> bool | str:
+    mode = _current_thinking_mode()
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True
+    return mode
+
+
 def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for message in messages:
@@ -198,6 +242,7 @@ def _openai_to_ollama_request(
         "model": payload.get("model"),
         "messages": _openai_to_ollama_messages(messages),
         "stream": payload.get("stream", False) if force_stream is None else force_stream,
+        "think": _ollama_think_value(),
     }
 
     if tools is None:
@@ -309,10 +354,11 @@ def _normalize_openai_response_from_ollama(ollama_resp: dict[str, Any]) -> dict[
 async def _call_upstream(payload: dict[str, Any]) -> dict[str, Any]:
     client = await _http()
     if UPSTREAM_API_STYLE == "openai":
+        openai_payload = _apply_openai_thinking(payload)
         response = await client.post(
             f"{UPSTREAM_LLM_URL}/v1/chat/completions",
             headers=_upstream_headers(),
-            json=payload,
+            json=openai_payload,
         )
         if response.status_code >= 400:
             raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -659,13 +705,14 @@ async def chat_completions(request: Request):
         if requested_stream:
             if UPSTREAM_API_STYLE == "openai":
                 client = await _http()
+                openai_body = _apply_openai_thinking(body)
 
                 async def stream_passthrough() -> AsyncIterator[bytes]:
                     async with client.stream(
                         "POST",
                         f"{UPSTREAM_LLM_URL}/v1/chat/completions",
                         headers=_upstream_headers(),
-                        json=body,
+                        json=openai_body,
                     ) as response:
                         if response.status_code >= 400:
                             error_payload = (await response.aread()).decode(

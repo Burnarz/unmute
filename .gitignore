@@ -23,6 +23,7 @@ certs/
 
 volumes/
 CLAUDE.md
+AGENTS.md
 .claude/settings.local.json
 voices.yaml
 services/moshi-server/configs/tts.toml

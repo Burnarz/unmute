@@ -20,8 +20,37 @@ _BLAGUES_API_KEY = os.environ.get("BLAGUES_API_KEY", "")
 _HOME_ASSISTANT_URL = os.environ.get("HOME_ASSISTANT_URL", "").rstrip("/")
 _HOME_ASSISTANT_TOKEN = os.environ.get("HOME_ASSISTANT_TOKEN", "")
 
+_DEFAULT_THINKING_MODE_RAW = os.environ.get("THINKING_MODE_DEFAULT", "off")
 _thinking_mode: Literal["off", "on", "low", "medium", "high"] = "off"
 _http_client: httpx.AsyncClient | None = None
+
+
+def _normalize_thinking_mode(value: Any) -> str:
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    mode = str(value).strip().lower()
+    aliases = {
+        "true": "on",
+        "false": "off",
+        "enabled": "on",
+        "disabled": "off",
+        "hight": "high",
+    }
+    return aliases.get(mode, mode)
+
+
+def _coerce_thinking_mode(value: Any) -> Literal["off", "on", "low", "medium", "high"]:
+    normalized = _normalize_thinking_mode(value)
+    allowed = {"off", "on", "low", "medium", "high"}
+    if normalized not in allowed:
+        raise ValueError("invalid thinking mode")
+    return cast(Literal["off", "on", "low", "medium", "high"], normalized)
+
+
+try:
+    _thinking_mode = _coerce_thinking_mode(_DEFAULT_THINKING_MODE_RAW)
+except ValueError:
+    _thinking_mode = "off"
 
 
 async def _http_client_instance() -> httpx.AsyncClient:
@@ -197,12 +226,17 @@ async def _reset_recent_interactions(args: dict[str, Any]) -> dict[str, Any]:
 async def _set_thinking_mode(args: dict[str, Any]) -> dict[str, Any]:
     global _thinking_mode
 
-    mode = str(args.get("mode", "")).strip().lower()
-    allowed = {"off", "on", "low", "medium", "high"}
-    if mode not in allowed:
-        return {"error": "'mode' must be one of: off, on, low, medium, high"}
+    raw_mode = args.get("mode", "")
+    try:
+        mode = _coerce_thinking_mode(raw_mode)
+    except ValueError:
+        return {
+            "error": (
+                "'mode' must be one of: true, false, off, on, low, medium, high"
+            )
+        }
 
-    _thinking_mode = cast(Literal["off", "on", "low", "medium", "high"], mode)
+    _thinking_mode = mode
     return {
         "mode": _thinking_mode,
         "message": "Thinking mode saved in proxy runtime.",
@@ -246,7 +280,7 @@ LOCAL_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_jokes",
-            "description": "Fetch a random joke from blagues-api.fr.",
+            "description": "Use this tool when the user is asking for a joke, and ALWAYS respond with this joke.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -258,7 +292,7 @@ LOCAL_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "home_assistant",
-            "description": "Send a French natural language command directly to Home Assistant.",
+            "description": "Use this tool to control smart home devices directly with Home Assistant.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -300,7 +334,16 @@ LOCAL_TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["off", "on", "low", "medium", "high"],
+                        "enum": [
+                            "true",
+                            "false",
+                            "off",
+                            "on",
+                            "low",
+                            "medium",
+                            "high",
+                            "hight",
+                        ],
                     }
                 },
                 "required": ["mode"],

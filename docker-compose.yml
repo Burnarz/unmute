@@ -84,6 +84,7 @@ services:
     environment:
       - UPSTREAM_LLM_URL=${LLM_URL}
       - UPSTREAM_LLM_API_KEY=ollama
+      - UPSTREAM_API_STYLE=${API_STYLE:-ollama}
       - TOOL_CALLING_ENABLED=1
       - BLAGUES_API_KEY=${BLAGUES_API_KEY}
       - BRAVE_API_KEY=${BRAVE_API_KEY}

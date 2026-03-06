@@ -85,23 +85,46 @@ def _get_tools_from_request(body: dict[str, Any]) -> list[dict[str, Any]]:
 def _build_tools(
     excluded_tools: set[str], incoming_tools: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    tools = [tool for tool in incoming_tools if isinstance(tool, dict)]
-    for tool in LOCAL_TOOLS:
-        name = tool.get("function", {}).get("name")
-        if isinstance(name, str) and name not in excluded_tools:
-            tools.append(tool)
+    # 1. Collect all candidates
+    all_candidates: list[dict[str, Any]] = []
+    
+    # Add incoming tools from the request
+    all_candidates.extend(t for t in incoming_tools if isinstance(t, dict))
+    
+    # Add local tools
+    all_candidates.extend(LOCAL_TOOLS)
+    
+    # Add MCP tools
     if _mcp_manager is not None:
-        tools.extend(
-            tool
-            for tool in _mcp_manager.openai_tools
-            if tool.get("function", {}).get("name") not in excluded_tools
-        )
+        all_candidates.extend(_mcp_manager.openai_tools)
+
+    # 2. Filter and deduplicate by name
     dedup: dict[str, dict[str, Any]] = {}
-    for tool in tools:
-        name = tool.get("function", {}).get("name")
+    excluded_count = 0
+    
+    # Helper to check if a name is excluded (robust check)
+    def is_excluded(name: str) -> bool:
+        if name in excluded_tools: return True
+        # Check if any excluded tool name is a substring or match without underscores
+        norm_name = name.replace("_", "").lower()
+        for ex in excluded_tools:
+            if ex.replace("_", "").lower() == norm_name: return True
+        return False
+
+    for tool in all_candidates:
+        fn = tool.get("function", {})
+        name = fn.get("name")
         if isinstance(name, str):
+            if is_excluded(name):
+                excluded_count += 1
+                continue
             dedup[name] = tool
-    return list(dedup.values())
+            
+    final_tools = list(dedup.values())
+    logger.info("Tools built: %d total, %d excluded, %d remaining. Tools: %s", 
+                len(all_candidates), excluded_count, len(final_tools), 
+                ", ".join(dedup.keys()))
+    return final_tools
 
 
 def _current_thinking_mode() -> str:
@@ -366,10 +389,16 @@ async def models():
 async def chat_completions(request: Request):
     body = await request.json()
     stream = bool(body.get("stream", False))
-    tools = _build_tools(load_mcp_excluded_tools().excluded_tools, _get_tools_from_request(body))
+    
+    # Always build tools list (includes request tools, local tools, and MCP)
+    # This also applies exclusions.
+    excl_config = load_mcp_excluded_tools()
+    tools = _build_tools(excl_config.excluded_tools, _get_tools_from_request(body))
 
+    # If tool calling is disabled or literally no tools remain after filtering
     if not TOOL_CALLING_ENABLED or not tools:
         if stream:
+            # ... (rest of stream logic)
             c = await _http()
             if UPSTREAM_API_STYLE == "openai":
                 async def ps():

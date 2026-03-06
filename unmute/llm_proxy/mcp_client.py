@@ -361,7 +361,10 @@ class MCPManager:
 
                 tools = await server.list_tools()
                 for tool in tools:
-                    if tool.openai_name in self._excluded_tools:
+                    # Allow exclusion by short name (tool_name) or full name (openai_name)
+                    if tool.openai_name in self._excluded_tools or tool.tool_name in self._excluded_tools:
+                        logger.info("Excluding MCP tool: %s (short name match: %s)", 
+                                    tool.openai_name, tool.tool_name in self._excluded_tools)
                         continue
                     self._tool_mapping[tool.openai_name] = (server, tool.tool_name)
                     self._openai_tools.append(tool.to_openai_tool())

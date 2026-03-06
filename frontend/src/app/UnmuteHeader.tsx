@@ -9,49 +9,9 @@ const frankRuhlLibre = Frank_Ruhl_Libre({
   subsets: ["latin"],
 });
 
-const ShortExplanation = () => {
-  return (
-    <>
-      <p className="text-xs text-right">
-        Speak to an AI using our low-latency open-source{" "}
-        <Link
-          href="https://kyutai.org/stt"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          speech-to-text
-        </Link>{" "}
-        and{" "}
-        <Link
-          href="https://kyutai.org/tts"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          text-to-speech
-        </Link>
-        .
-      </p>
-      <p className="text-xs text-right">
-        Also check out{" "}
-        <Link
-          href="https://kyutai.org/pocket-tts?ref=unmute"
-          className="underline text-green"
-          target="_blank"
-          rel="noopener"
-        >
-          Pocket TTS
-        </Link>
-        , our new tiny TTS model with voice cloning!
-      </p>
-    </>
-  );
-};
-
 const UnmuteHeader = () => {
   return (
-    <div className="flex flex-col gap-2 py-2 md:py-8 items-end max-w-80 md:max-w-60 xl:max-w-80">
+    <div className="flex flex-col gap-2 py-2 md:py-8 items-start max-w-80 md:max-w-60 xl:max-w-80">
       <h1 className={`text-3xl ${frankRuhlLibre.className}`}>Unmute.sh</h1>
       <div className="flex items-center gap-2 -mt-1 text-xs">
         by
@@ -59,7 +19,6 @@ const UnmuteHeader = () => {
           <img src={kyutaiLogo.src} alt="Kyutai logo" className="w-20" />
         </Link>
       </div>
-      <ShortExplanation />
       <Modal
         trigger={
           <span className="flex items-center gap-1 text-lightgray">

@@ -266,7 +266,7 @@ const Unmute = () => {
       {/* The main full-height demo */}
       <div className="relative flex w-full min-h-screen flex-col text-white bg-background items-center">
         {/* z-index on the header to put it in front of the circles */}
-        <header className="static md:absolute max-w-6xl px-3 md:px-8 right-0 flex justify-end z-10">
+        <header className="static md:absolute max-w-6xl px-3 md:px-8 left-0 flex justify-start z-10">
           <UnmuteHeader />
         </header>
         <div
@@ -297,30 +297,6 @@ const Unmute = () => {
           setConfig={setUnmuteConfig}
           voiceCloningUp={healthStatus.voice_cloning_up || false}
         />
-        <div className="w-full flex flex-col-reverse md:flex-row items-center justify-center px-3 gap-3 my-6">
-          <SlantedButton
-            onClick={onDownloadRecordingButtonPress}
-            kind={recordingAvailable ? "secondary" : "disabled"}
-            extraClasses="w-full max-w-96"
-          >
-            {"download recording"}
-          </SlantedButton>
-          <SlantedButton
-            onClick={onConnectButtonPress}
-            kind={shouldConnect ? "secondary" : "primary"}
-            extraClasses="w-full max-w-96"
-          >
-            {shouldConnect ? "disconnect" : "connect"}
-          </SlantedButton>
-          {/* Maybe we don't need to explicitly show the status */}
-          {/* {renderConnectionStatus(readyState, false)} */}
-          {microphoneAccess === "refused" && (
-            <div className="text-red">
-              {"You'll need to allow microphone access to use the demo. " +
-                "Please check your browser settings."}
-            </div>
-          )}
-        </div>
       </div>
       {/* Debug stuff, not counted into the screen height */}
       {isDevMode && (

@@ -480,54 +480,171 @@ async def _resolve_tool_calls(
     raise HTTPException(status_code=400, detail="Maximum tool rounds reached")
 
 
-async def _stream_final_response(final_response: dict[str, Any]) -> AsyncIterator[bytes]:
-    model = str(final_response.get("model", "unknown"))
+async def _resolve_tool_calls_streaming(
+    body: dict[str, Any],
+    tools: list[dict[str, Any]],
+) -> AsyncIterator[bytes]:
+    messages_raw = body.get("messages", [])
+    if not isinstance(messages_raw, list):
+        raise HTTPException(status_code=400, detail="Expected list in 'messages'")
+
+    messages: list[dict[str, Any]] = [m for m in messages_raw if isinstance(m, dict)]
+
+    client = await _http()
+    response_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
-    response_id = str(final_response.get("id", f"chatcmpl-{uuid.uuid4().hex}"))
+    model = str(body.get("model", "unknown"))
 
-    role_chunk = {
-        "id": response_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-    }
-    yield _sse_line(role_chunk)
+    for _ in range(MAX_TOOL_ROUNDS):
+        # Determine upstream request based on style
+        if UPSTREAM_API_STYLE == "openai":
+            upstream_url = f"{UPSTREAM_LLM_URL}/v1/chat/completions"
+            payload = _apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": True})
+        elif UPSTREAM_API_STYLE == "ollama":
+            upstream_url = f"{UPSTREAM_LLM_URL}/api/chat"
+            payload = _openai_to_ollama_request(body, force_stream=True, tools=tools)
+            # Update messages in the payload to include current history
+            payload["messages"] = _openai_to_ollama_messages(messages)
+        else:
+            raise HTTPException(status_code=500, detail=f"Unsupported UPSTREAM_API_STYLE={UPSTREAM_API_STYLE}")
 
-    choices = final_response.get("choices", [])
-    message: dict[str, Any] = {}
-    if isinstance(choices, list) and choices:
-        first_choice = choices[0]
-        if isinstance(first_choice, dict):
-            maybe_message = first_choice.get("message", {})
-            if isinstance(maybe_message, dict):
-                message = maybe_message
-    text = _extract_message_text(message)
-    for chunk in _iter_text_chunks(text):
-        payload = {
-            "id": response_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": chunk},
-                    "finish_reason": None,
-                }
-            ],
-        }
-        yield _sse_line(payload)
+        async with client.stream(
+            "POST",
+            upstream_url,
+            headers=_upstream_headers(),
+            json=payload,
+            timeout=120,
+        ) as response:
+            if response.status_code >= 400:
+                error_payload = (await response.aread()).decode("utf-8", errors="replace")
+                raise HTTPException(status_code=response.status_code, detail=error_payload)
 
-    end_payload = {
-        "id": response_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    }
-    yield _sse_line(end_payload)
-    yield _sse_line("[DONE]")
+            determined_type = False
+            is_tool_call = False
+            
+            # Accumulators for tool calls
+            current_tool_calls: dict[int, dict[str, Any]] = {}
+            full_content_acc = []
+
+            # First chunk role emission (only on the very last turn that yields to client)
+            role_emitted = False
+
+            async for line in response.aiter_lines():
+                if not line or line.strip() == "":
+                    continue
+                
+                # Handle SSE prefix if OpenAI
+                chunk_data = line.strip()
+                if chunk_data.startswith("data: "):
+                    chunk_data = chunk_data[len("data: "):]
+                
+                if chunk_data == "[DONE]":
+                    break
+                
+                try:
+                    parsed = json.loads(chunk_data)
+                except json.JSONDecodeError:
+                    continue
+
+                # Normalize chunk based on source
+                delta: dict[str, Any] = {}
+                finish_reason = None
+                
+                if UPSTREAM_API_STYLE == "openai":
+                    choices = parsed.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        finish_reason = choices[0].get("finish_reason")
+                else:  # ollama
+                    msg = parsed.get("message", {})
+                    delta = {"content": msg.get("content", ""), "tool_calls": msg.get("tool_calls")}
+                    if parsed.get("done"):
+                        finish_reason = "stop" if not msg.get("tool_calls") else "tool_calls"
+
+                # Check if we are starting a tool call or content
+                if not determined_type:
+                    if delta.get("tool_calls") or (UPSTREAM_API_STYLE == "openai" and "tool_calls" in delta):
+                        is_tool_call = True
+                    elif delta.get("content") or "content" in delta:
+                        is_tool_call = False
+                    
+                    if delta.get("tool_calls") or delta.get("content") or finish_reason:
+                        determined_type = True
+
+                if is_tool_call:
+                    # Accumulate tool calls for later execution
+                    tcs = delta.get("tool_calls", [])
+                    if tcs:
+                        for tc in tcs:
+                            idx = tc.get("index", 0)
+                            if idx not in current_tool_calls:
+                                current_tool_calls[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
+                            
+                            if tc.get("id"):
+                                current_tool_calls[idx]["id"] = tc["id"]
+                            
+                            fn = tc.get("function", {})
+                            if fn.get("name"):
+                                current_tool_calls[idx]["function"]["name"] += fn["name"]
+                            
+                            args_delta = fn.get("arguments")
+                            if args_delta:
+                                if isinstance(args_delta, dict):
+                                    # If it's a dict, it's likely the full arguments object
+                                    args_delta = json.dumps(args_delta, ensure_ascii=False)
+                                
+                                current_tool_calls[idx]["function"]["arguments"] += args_delta
+                else:
+                    # This is final content, stream it to client!
+                    if not role_emitted:
+                        yield _sse_line({
+                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+                        })
+                        role_emitted = True
+                    
+                    content_piece = delta.get("content", "")
+                    if content_piece:
+                        full_content_acc.append(content_piece)
+                        yield _sse_line({
+                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                            "choices": [{"index": 0, "delta": {"content": content_piece}, "finish_reason": None}]
+                        })
+                    
+                    if finish_reason:
+                        yield _sse_line({
+                            "id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]
+                        })
+                        yield _sse_line("[DONE]")
+                        return # Exit the entire generator, we are done!
+
+            # If we finished the stream and it was a tool call, process and loop
+            if is_tool_call:
+                tool_calls_list = [v for k, v in sorted(current_tool_calls.items())]
+                messages.append({"role": "assistant", "tool_calls": tool_calls_list})
+                
+                for tc in tool_calls_list:
+                    tool_name = tc["function"]["name"]
+                    try:
+                        args = json.loads(tc["function"]["arguments"])
+                    except:
+                        args = {}
+                    
+                    tool_output = await _tool_result(tool_name, args)
+                    messages.append({
+                        "role": "tool",
+                        "name": tool_name,
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(tool_output, ensure_ascii=False)
+                    })
+                # Loop continues to next round
+            else:
+                # Fallback if stream ended without finish_reason
+                yield _sse_line("[DONE]")
+                return
+
+    raise HTTPException(status_code=400, detail="Maximum tool rounds reached")
 
 
 async def _stream_ollama_passthrough(body: dict[str, Any]) -> AsyncIterator[bytes]:
@@ -552,6 +669,7 @@ async def _stream_ollama_passthrough(body: dict[str, Any]) -> AsyncIterator[byte
         f"{UPSTREAM_LLM_URL}/api/chat",
         headers=_upstream_headers(),
         json=payload,
+        timeout=120,
     ) as response:
         if response.status_code >= 400:
             error_payload = (await response.aread()).decode("utf-8", errors="replace")
@@ -713,6 +831,7 @@ async def chat_completions(request: Request):
                         f"{UPSTREAM_LLM_URL}/v1/chat/completions",
                         headers=_upstream_headers(),
                         json=openai_body,
+                        timeout=120,
                     ) as response:
                         if response.status_code >= 400:
                             error_payload = (await response.aread()).decode(
@@ -744,12 +863,11 @@ async def chat_completions(request: Request):
         result = await _call_upstream(body)
         return JSONResponse(content=result)
 
-    final_response = await _resolve_tool_calls(body, tools)
-
     if requested_stream:
         return StreamingResponse(
-            _stream_final_response(final_response),
+            _resolve_tool_calls_streaming(body, tools),
             media_type="text/event-stream",
         )
 
+    final_response = await _resolve_tool_calls(body, tools)
     return JSONResponse(content=final_response)

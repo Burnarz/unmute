@@ -21,9 +21,6 @@ _HOME_ASSISTANT_URL = os.environ.get("HOME_ASSISTANT_URL", "").rstrip("/")
 _HOME_ASSISTANT_TOKEN = os.environ.get("HOME_ASSISTANT_TOKEN", "")
 
 _DEFAULT_THINKING_MODE_RAW = os.environ.get("THINKING_MODE_DEFAULT", "off")
-_thinking_mode: Literal["off", "on", "low", "medium", "high"] = "off"
-_http_client: httpx.AsyncClient | None = None
-
 
 def _normalize_thinking_mode(value: Any) -> str:
     if isinstance(value, bool):
@@ -34,7 +31,6 @@ def _normalize_thinking_mode(value: Any) -> str:
         "false": "off",
         "enabled": "on",
         "disabled": "off",
-        "hight": "high",
     }
     return aliases.get(mode, mode)
 
@@ -43,8 +39,14 @@ def _coerce_thinking_mode(value: Any) -> Literal["off", "on", "low", "medium", "
     normalized = _normalize_thinking_mode(value)
     allowed = {"off", "on", "low", "medium", "high"}
     if normalized not in allowed:
-        raise ValueError("invalid thinking mode")
+        raise ValueError(f"invalid thinking mode: {normalized}")
     return cast(Literal["off", "on", "low", "medium", "high"], normalized)
+
+
+_thinking_mode: Literal["off", "on", "low", "medium", "high"] = _coerce_thinking_mode(
+    _DEFAULT_THINKING_MODE_RAW
+)
+_http_client: httpx.AsyncClient | None = None
 
 
 try:
@@ -232,7 +234,7 @@ async def _set_thinking_mode(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         return {
             "error": (
-                "'mode' must be one of: true, false, off, on, low, medium, high"
+                "'mode' must be one of: off, on, low, medium, high"
             )
         }
 
@@ -335,14 +337,11 @@ LOCAL_TOOLS: list[dict[str, Any]] = [
                     "mode": {
                         "type": "string",
                         "enum": [
-                            "true",
-                            "false",
                             "off",
                             "on",
                             "low",
                             "medium",
                             "high",
-                            "hight",
                         ],
                     }
                 },

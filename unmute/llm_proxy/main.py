@@ -192,6 +192,15 @@ def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str,
     return out
 
 
+def _ollama_think_value() -> bool | str:
+    mode = _current_thinking_mode()
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True
+    return mode
+
+
 def _openai_to_ollama_request(
     payload: dict[str, Any],
     *,
@@ -206,6 +215,7 @@ def _openai_to_ollama_request(
         "model": payload.get("model"),
         "messages": _openai_to_ollama_messages(messages),
         "stream": payload.get("stream", False) if force_stream is None else force_stream,
+        "think": _ollama_think_value(),
     }
     if tools is None:
         tools = _get_tools_from_request(payload)

@@ -24,6 +24,8 @@ import clsx from "clsx";
 import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 
+import MediaSidebar, { DetectedMedia } from "./MediaSidebar";
+
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
   const [debugDict, setDebugDict] = useState<object | null>(null);
@@ -32,6 +34,7 @@ const Unmute = () => {
   );
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
   const chatHistory = compressChatHistory(rawChatHistory);
+  const [detectedMedia, setDetectedMedia] = useState<DetectedMedia[]>([]);
 
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
 
@@ -192,14 +195,31 @@ const Unmute = () => {
         { role: "user", content: data.delta },
       ]);
     } else if (data.type === "response.text.delta") {
-      // Text-to-speech output
+      // Text-to-speech output - ADD TO HISTORY
       setRawChatHistory((prev) => [
         ...prev,
-        // The TTS doesn't include spaces in its messages, so add a leading space.
-        // This way we'll get a leading space at the very beginning of the message,
-        // but whatever.
         { role: "assistant", content: " " + data.delta },
       ]);
+    } else if (data.type === "unmute.response.text.delta.ready") {
+      // LLM output before TTS - USE FOR URL DETECTION ONLY
+      const urlRegex = /https?:\/\/\S+/g;
+      const matches = data.delta.match(urlRegex);
+      if (matches) {
+        setDetectedMedia((prev) => {
+          const newItems: DetectedMedia[] = [];
+          for (const url of matches) {
+            if (!prev.some((item) => item.url === url)) {
+              const isImage = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(url);
+              newItems.unshift({
+                url,
+                type: isImage ? "image" : "link",
+                timestamp: Date.now() + Math.random(),
+              });
+            }
+          }
+          return [...newItems, ...prev];
+        });
+      }
     } else {
       const ignoredTypes = [
         "session.updated",
@@ -229,6 +249,7 @@ const Unmute = () => {
       localStorage.getItem(RECORDING_CONSENT_STORAGE_KEY) === "true";
 
     setRawChatHistory([]);
+    setDetectedMedia([]);
     sendMessage(
       JSON.stringify({
         type: "session.update",
@@ -289,6 +310,7 @@ const Unmute = () => {
           </div>
         </div>
         {showSubtitles && <Subtitles chatHistory={chatHistory} />}
+        <MediaSidebar items={detectedMedia} />
         <UnmuteConfigurator
           backendServerUrl={backendServerUrl}
           config={unmuteConfig}

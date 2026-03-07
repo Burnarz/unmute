@@ -79,6 +79,10 @@ class GradioUpdate(BaseModel):
     debug_plot_data: list[dict]
 
 
+import re
+
+URL_REGEX = re.compile(r"https?://\S+")
+
 class UnmuteHandler(AsyncStreamHandler):
     def __init__(self) -> None:
         super().__init__(
@@ -249,7 +253,12 @@ class UnmuteHandler(AsyncStreamHandler):
                     break  # We've been interrupted
 
                 assert isinstance(delta, str)  # make Pyright happy
-                await tts.send(delta)
+                
+                # Only send to TTS if it's not a URL
+                if not URL_REGEX.search(delta):
+                    await tts.send(delta)
+                else:
+                    logger.debug("Skipping URL for TTS: %s", delta)
 
             await self.output_queue.put(
                 # The words include the whitespace, so no need to add it here

@@ -269,26 +269,24 @@ const Unmute = () => {
         <header className="static md:absolute max-w-6xl px-3 md:px-8 left-0 flex justify-start z-10">
           <UnmuteHeader />
         </header>
-        <div
-          className={clsx(
-            "w-full h-auto min-h-75",
-            "flex flex-row-reverse md:flex-row items-center justify-center grow",
-            "-mt-10 md:mt-0 mb-10 md:mb-0 md:-mr-4",
-          )}
-        >
-          <PositionedAudioVisualizer
-            chatHistory={chatHistory}
-            role={"assistant"}
-            analyserNode={audioProcessor.current?.outputAnalyser || null}
-            onCircleClick={onConnectButtonPress}
-            isConnected={shouldConnect}
-          />
-          <PositionedAudioVisualizer
-            chatHistory={chatHistory}
-            role={"user"}
-            analyserNode={audioProcessor.current?.inputAnalyser || null}
-            isConnected={shouldConnect}
-          />
+        <div className="relative w-full flex items-center justify-center grow -mt-10 md:mt-0 mb-10 md:mb-0">
+          <div className="absolute z-0">
+            <PositionedAudioVisualizer
+              chatHistory={chatHistory}
+              role={"assistant"}
+              analyserNode={audioProcessor.current?.outputAnalyser || null}
+              isConnected={shouldConnect}
+            />
+          </div>
+          <div className="absolute z-10">
+            <PositionedAudioVisualizer
+              chatHistory={chatHistory}
+              role={"user"}
+              analyserNode={audioProcessor.current?.inputAnalyser || null}
+              onCircleClick={onConnectButtonPress}
+              isConnected={shouldConnect}
+            />
+          </div>
         </div>
         {showSubtitles && <Subtitles chatHistory={chatHistory} />}
         <UnmuteConfigurator

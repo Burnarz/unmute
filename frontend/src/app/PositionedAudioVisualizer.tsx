@@ -46,17 +46,12 @@ const PositionedAudioVisualizer = ({
   });
 
   return (
-    <div
-      className={clsx(
-        "max-w-3xl md:h-full flex items-center -mx-8 -my-8 px-4 md:px-0",
-        isAssistant
-          ? "md:w-full flex-row md:flex-row-reverse pt-36 md:pt-0"
-          : "w-full flex-row-reverse md:flex-row md:pt-36 -ml-40 md:ml-0"
-      )}
-    >
+    <div className="flex items-center justify-center">
       <div
         className={clsx(
-          isAssistant ? "w-40 md:w-72 2xl:w-96" : "w-full md:w-48 2xl:w-72"
+          isAssistant
+            ? "w-44 md:w-56 2xl:w-64"
+            : "w-[calc(11rem+40px)] md:w-[calc(14rem+40px)] 2xl:w-[calc(16rem+40px)]"
         )}
       >
         <canvas

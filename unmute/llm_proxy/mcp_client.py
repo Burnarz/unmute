@@ -103,12 +103,21 @@ class MCPServerProcess:
 
     async def _spawn_process(self) -> None:
         self._stderr_tail.clear()
+        
+        # Merge system environment with server-specific env
+        full_env = {**os.environ, **self.config.env}
+        
+        logger.info("Starting MCP server '%s' with command %s and env vars: %s", 
+                    self.config.name, self.config.command, 
+                    {k: v for k, v in full_env.items() if "KEY" not in k and "TOKEN" not in k})
+        
         self._process = await asyncio.create_subprocess_exec(
             *self.config.command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, **self.config.env},
+            env=full_env,
+            cwd=self.config.cwd,
         )
 
         assert self._process.stdout is not None

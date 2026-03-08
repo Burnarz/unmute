@@ -92,6 +92,7 @@ services:
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - HOME_ASSISTANT_URL=${HOME_ASSISTANT_URL}
       - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
+      - MEMORY_FILE_PATH=/app/memory/memory.jsonl
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

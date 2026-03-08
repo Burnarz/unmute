@@ -23,6 +23,7 @@ class MCPServerConfig:
     enabled: bool = True
     startup_timeout_sec: float = 10.0
     tool_timeout_sec: float = 15.0
+    cwd: str | None = None
 
 
 @dataclass(slots=True)
@@ -96,6 +97,7 @@ def load_mcp_config(path: Path = DEFAULT_MCP_SERVERS_PATH) -> MCPConfig:
                 enabled=bool(server.get("enabled", True)),
                 startup_timeout_sec=float(server.get("startup_timeout_sec", 10.0)),
                 tool_timeout_sec=float(server.get("tool_timeout_sec", 15.0)),
+                cwd=server.get("cwd"),
             )
         )
 

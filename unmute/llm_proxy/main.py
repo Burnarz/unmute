@@ -269,7 +269,7 @@ async def _resolve_tool_calls_streaming(
     role_emitted = False
 
     for round_idx in range(MAX_TOOL_ROUNDS):
-        logger.info("Starting tool round %d", round_idx)
+        logger.info("Starting tool round %d (sending %d tools to upstream)", round_idx, len(tools))
         if UPSTREAM_API_STYLE == "openai":
             url = f"{UPSTREAM_LLM_URL}/v1/chat/completions"
             payload = _apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": True})
@@ -346,6 +346,7 @@ async def _resolve_tool_calls_streaming(
                     except: args = {}
                     logger.info("Executing tool: %s", name)
                     res = await _tool_result(name, args)
+                    logger.info("Tool '%s' result summary: %s", name, str(res)[:200] + "..." if len(str(res)) > 200 else str(res))
                     messages.append({"role": "tool", "name": name, "tool_call_id": tc.get("id") or f"tc-{uuid.uuid4().hex}", 
                                      "content": json.dumps(res, ensure_ascii=False)})
                     

@@ -169,6 +169,10 @@ class UnmuteResponseAudioDeltaReady(
     number_of_samples: int
 
 
+class UnmuteResetHistory(BaseEvent[Literal["unmute.reset_history"]]):
+    count: int
+
+
 class UnmuteInterruptedByVAD(BaseEvent[Literal["unmute.interrupted_by_vad"]]):
     """The VAD interrupted the response generation."""
 
@@ -188,6 +192,7 @@ ServerEvent = Union[
     UnmuteAdditionalOutputs,
     UnmuteResponseTextDeltaReady,
     UnmuteResponseAudioDeltaReady,
+    UnmuteResetHistory,
     UnmuteInterruptedByVAD,
 ]
 

@@ -216,12 +216,12 @@ async def _reset_recent_interactions(args: dict[str, Any]) -> dict[str, Any]:
     if count <= 0:
         return {"error": "'interactions' must be >= 1"}
 
-    # The proxy receives full chat history from Unmute on each request, so it cannot
-    # mutate persistent memory by itself.
+    # We return the count, the proxy loop will handle the actual truncation
+    # of the current message list and signal the backend to do the same.
     return {
-        "status": "not_supported",
-        "message": "Cannot delete persistent history from this proxy layer.",
-        "requested_interactions": count,
+        "status": "success",
+        "message": f"Successfully marked {count} interactions for removal.",
+        "count": count,
     }
 
 

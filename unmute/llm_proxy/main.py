@@ -348,6 +348,21 @@ async def _resolve_tool_calls_streaming(
                     res = await _tool_result(name, args)
                     messages.append({"role": "tool", "name": name, "tool_call_id": tc.get("id") or f"tc-{uuid.uuid4().hex}", 
                                      "content": json.dumps(res, ensure_ascii=False)})
+                    
+                    # Special handling for reset_recent_interactions
+                    if name == "reset_recent_interactions" and res.get("status") == "success":
+                        count = res.get("count", 0)
+                        # The count is 'interactions', where 1 interaction = 1 user + 1 assistant message (usually).
+                        # We increment count by 1 to include the current turn (the reset request itself).
+                        to_remove = (count + 1) * 2
+                        if len(messages) > to_remove + 1:
+                            logger.info("Truncating %d messages from history (requested %d + 1 current turn)", to_remove, count)
+                            idx_to_keep = max(1, len(messages) - 2 - to_remove)
+                            messages = [messages[0]] + messages[idx_to_keep:]
+                        
+                        # Emit custom SSE event for the backend to sync
+                        # The backend also needs to increment count to stay in sync
+                        yield _sse_line({"id": response_id, "object": "unmute.reset_history", "count": count + 1})
             elif loop_finish_reason == "stop" or not full_content:
                 logger.info("Round %d finished with stop", round_idx)
                 yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,

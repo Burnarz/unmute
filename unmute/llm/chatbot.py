@@ -74,6 +74,30 @@ class Chatbot:
             self.chat_history[-1]["content"] += delta
             return last_message == ""  # new message if `last_message` was empty
 
+    def reset_recent_interactions(self, count: int):
+        """Remove the last `count` interactions from the chat history.
+        
+        An interaction is typically a pair of user and assistant messages.
+        The system prompt at index 0 is always preserved.
+        """
+        if count <= 0:
+            return
+
+        # We want to remove 'count * 2' messages, but keep the system prompt at 0.
+        to_remove = count * 2
+        if len(self.chat_history) > to_remove:
+            # Keep system prompt + any messages that should remain
+            new_history = [self.chat_history[0]] + self.chat_history[1 : -to_remove]
+            logger.info(
+                f"Resetting history: removed {len(self.chat_history) - len(new_history)} "
+                f"messages (requested {count} interactions)"
+            )
+            self.chat_history = new_history
+        else:
+            # If we don't have enough messages, just keep the system prompt
+            logger.info(f"Resetting history: keeping only system prompt (requested {count} interactions)")
+            self.chat_history = [self.chat_history[0]]
+
     def preprocessed_messages(self):
         if len(self.chat_history) > 2:
             messages = self.chat_history

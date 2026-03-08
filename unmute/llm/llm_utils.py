@@ -62,21 +62,27 @@ def preprocess_messages_for_llm(
     return output
 
 
-async def rechunk_to_words(iterator: AsyncIterator[str]) -> AsyncIterator[str]:
+async def rechunk_to_words(
+    iterator: AsyncIterator[str | Any],
+) -> AsyncIterator[str | Any]:
     """Rechunk the stream of text to whole words.
 
-    Otherwise the TTS doesn't know where word boundaries are and will mispronounce
-    split words.
-
-    The spaces will be included with the next word, so "foo bar baz" will be split into
-    "foo", " bar", " baz".
-    Multiple space-like characters will be merged to a single space.
+    Non-string objects are yielded immediately (pass-through).
     """
     buffer = ""
     space_re = re.compile(r"\s+")
     prefix = ""
-    async for delta in iterator:
-        buffer = buffer + delta
+    async for item in iterator:
+        if not isinstance(item, str):
+            # Yield buffered text before the non-string item
+            if buffer != "":
+                yield prefix + buffer
+                buffer = ""
+                prefix = " "
+            yield item
+            continue
+
+        buffer = buffer + item
         while True:
             match = space_re.search(buffer)
             if match is None:
@@ -94,7 +100,7 @@ async def rechunk_to_words(iterator: AsyncIterator[str]) -> AsyncIterator[str]:
 class LLMStream(Protocol):
     async def chat_completion(
         self, messages: list[dict[str, str]]
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Any]:
         """Get a chat completion from the LLM."""
         ...
 
@@ -139,7 +145,7 @@ class VLLMStream:
 
     async def chat_completion(
         self, messages: list[dict[str, str]]
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Any]:
         stream = await self.client.chat.completions.create(
             model=self.model,
             messages=cast(Any, messages),  # Cast and hope for the best
@@ -149,6 +155,15 @@ class VLLMStream:
 
         async with stream:
             async for chunk in stream:
+                # Support for custom Unmute events from the proxy
+                chunk_dict = chunk.model_dump()
+                if chunk_dict.get("object", "").startswith("unmute."):
+                    yield chunk_dict
+                    continue
+
+                if not chunk.choices:
+                    continue
+                
                 chunk_content = chunk.choices[0].delta.content
 
                 if not chunk_content:

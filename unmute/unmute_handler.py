@@ -228,7 +228,17 @@ class UnmuteHandler(AsyncStreamHandler):
         mt.VLLM_ACTIVE_SESSIONS.inc()
 
         try:
-            async for delta in rechunk_to_words(llm.chat_completion(messages)):
+            async for item in rechunk_to_words(llm.chat_completion(messages)):
+                if not isinstance(item, str):
+                    # Handle custom events from the proxy
+                    if isinstance(item, dict) and item.get("object") == "unmute.reset_history":
+                        count = item.get("count", 0)
+                        logger.info("Proxy requested history reset: %d interactions", count)
+                        self.chatbot.reset_recent_interactions(count)
+                        await self.output_queue.put(ora.UnmuteResetHistory(count=count))
+                    continue
+
+                delta = item
                 await self.output_queue.put(
                     ora.UnmuteResponseTextDeltaReady(delta=delta)
                 )

@@ -202,12 +202,16 @@ const Unmute = () => {
       ]);
     } else if (data.type === "unmute.response.text.delta.ready") {
       // LLM output before TTS - USE FOR URL DETECTION ONLY
+      // Detect URLs in the new delta
       const urlRegex = /https?:\/\/\S+/g;
       const matches = data.delta.match(urlRegex);
       if (matches) {
         setDetectedMedia((prev) => {
           const newItems: DetectedMedia[] = [];
-          for (const url of matches) {
+          for (let url of matches) {
+            // Clean up trailing punctuation often included by models (like > or ) or .)
+            url = url.replace(/[>).,]+$/, "");
+
             if (!prev.some((item) => item.url === url)) {
               const isImage = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(url);
               newItems.unshift({
@@ -220,7 +224,7 @@ const Unmute = () => {
           return [...newItems, ...prev];
         });
       }
-    } else {
+
       const ignoredTypes = [
         "session.updated",
         "response.created",

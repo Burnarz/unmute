@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -185,7 +186,6 @@ def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str,
 
         if role == "tool":
             # Ollama expects 'tool' role for results.
-            # Some versions of Ollama don't use 'tool_call_id' but depend on order.
             pass
 
         out.append(mapped)
@@ -335,32 +335,34 @@ async def _resolve_tool_calls_streaming(
 
                 if fr:
                     loop_finish_reason = fr
-                    # Do not return yet, let the loop finish to ensure we saw everything
                     if fr == "tool_calls": break
 
             if current_tcs:
-                logger.info("Round %d found %d tool calls", round_idx, len(current_tcs))
+                logger.info("Round %d found %d tool calls. Executing in parallel...", round_idx, len(current_tcs))
                 tc_list = [v for k, v in sorted(current_tcs.items())]
-                
-                # Add current assistant message to history using the ROUND accumulator
                 messages.append({"role": "assistant", "content": "".join(round_content_acc), "tool_calls": tc_list})
                 
-                for tc in tc_list:
+                # Parallel tool execution
+                async def run_one_tool(tc):
                     name = tc["function"]["name"]
                     try: args = json.loads(tc["function"]["arguments"])
                     except: args = {}
                     logger.info("Executing tool: %s", name)
                     res = await _tool_result(name, args)
-                    logger.info("Tool '%s' result summary: %s", name, str(res)[:200] + "..." if len(str(res)) > 200 else str(res))
-                    messages.append({"role": "tool", "name": name, "tool_call_id": tc.get("id") or f"tc-{uuid.uuid4().hex}", 
+                    logger.info("Tool '%s' finished", name)
+                    return name, tc.get("id"), res
+
+                parallel_results = await asyncio.gather(*(run_one_tool(tc) for tc in tc_list))
+                
+                for name, tc_id, res in parallel_results:
+                    messages.append({"role": "tool", "name": name, "tool_call_id": tc_id or f"tc-{uuid.uuid4().hex}", 
                                      "content": json.dumps(res, ensure_ascii=False)})
                     
-                    # Special handling for reset_recent_interactions
                     if name == "reset_recent_interactions" and res.get("status") == "success":
                         count = res.get("count", 0)
                         to_remove = (count + 1) * 2
                         if len(messages) > to_remove + 1:
-                            logger.info("Truncating %d messages from history (requested %d + 1 current turn)", to_remove, count)
+                            logger.info("Truncating %d messages from history", to_remove)
                             idx_to_keep = max(1, len(messages) - 2 - to_remove)
                             messages = [messages[0]] + messages[idx_to_keep:]
                         yield _sse_line({"id": response_id, "object": "unmute.reset_history", "count": count + 1})
@@ -371,7 +373,6 @@ async def _resolve_tool_calls_streaming(
                 yield _sse_line("[DONE]")
                 return
             else:
-                # Content was streamed but no more tools, we're likely done
                 logger.info("Round %d finished after streaming content", round_idx)
                 yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
                                  "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
@@ -415,16 +416,11 @@ async def models():
 async def chat_completions(request: Request):
     body = await request.json()
     stream = bool(body.get("stream", False))
-    
-    # Always build tools list (includes request tools, local tools, and MCP)
-    # This also applies exclusions.
     excl_config = load_mcp_excluded_tools()
     tools = _build_tools(excl_config.excluded_tools, _get_tools_from_request(body))
 
-    # If tool calling is disabled or literally no tools remain after filtering
     if not TOOL_CALLING_ENABLED or not tools:
         if stream:
-            # ... (rest of stream logic)
             c = await _http()
             if UPSTREAM_API_STYLE == "openai":
                 async def ps():
@@ -448,7 +444,6 @@ async def chat_completions(request: Request):
                             yield _sse_line("[DONE]")
             return StreamingResponse(ops(), media_type="text/event-stream")
         
-        # Non-streaming passthrough
         if UPSTREAM_API_STYLE == "openai":
             c = await _http()
             r = await c.post(f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), json=_apply_openai_thinking(body))
@@ -461,7 +456,6 @@ async def chat_completions(request: Request):
     if stream:
         return StreamingResponse(_resolve_tool_calls_streaming(body, tools), media_type="text/event-stream")
     
-    # Non-streaming with tools
     messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
     for _ in range(MAX_TOOL_ROUNDS):
         res = await (await _http()).post(f"{UPSTREAM_LLM_URL}/v1/chat/completions" if UPSTREAM_API_STYLE == "openai" else f"{UPSTREAM_LLM_URL}/api/chat",
@@ -470,7 +464,6 @@ async def chat_completions(request: Request):
         
         parsed = res.json()
         if UPSTREAM_API_STYLE == "ollama": parsed = _normalize_openai_response_from_ollama(parsed)
-        
         msg = parsed["choices"][0]["message"]
         messages.append(msg)
         if not msg.get("tool_calls"): return JSONResponse(content=parsed)

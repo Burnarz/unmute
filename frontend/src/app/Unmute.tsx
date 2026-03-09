@@ -202,28 +202,53 @@ const Unmute = () => {
       ]);
     } else if (data.type === "unmute.response.text.delta.ready") {
       // LLM output before TTS - USE FOR URL DETECTION ONLY
-      // Detect URLs in the new delta
       const urlRegex = /https?:\/\/\S+/g;
-      const matches = data.delta.match(urlRegex);
-      if (matches) {
-        setDetectedMedia((prev) => {
-          const newItems: DetectedMedia[] = [];
-          for (let url of matches) {
-            // Clean up trailing punctuation often included by models (like > or ) or .)
-            url = url.replace(/[>).,]+$/, "");
 
-            if (!prev.some((item) => item.url === url)) {
-              const isImage = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(url);
-              newItems.unshift({
-                url,
-                type: isImage ? "image" : "link",
-                timestamp: Date.now() + Math.random(),
-              });
+      setRawChatHistory((prev) => {
+        // We need to find the full accumulated text of the CURRENT assistant message
+        // to detect URLs that might be split across deltas.
+        let currentMessageText = "";
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === "assistant") {
+            // Find the start of the current continuous block of assistant deltas
+            let j = i;
+            while (j >= 0 && prev[j].role === "assistant") {
+              currentMessageText = prev[j].content + currentMessageText;
+              j--;
             }
+            break;
           }
-          return [...newItems, ...prev];
-        });
-      }
+        }
+        // Add the new delta to our temporary check
+        currentMessageText += data.delta;
+
+        const matches = currentMessageText.match(urlRegex);
+        if (matches) {
+          setDetectedMedia((prevMedia) => {
+            const newItems: DetectedMedia[] = [];
+            for (let url of matches) {
+              url = url.replace(/[>).,]+$/, "");
+              if (!prevMedia.some((item) => item.url === url)) {
+                // More robust image detection: check for common image patterns even without extension at the very end
+                const isImage = /\.(jpg|jpeg|png|webp|gif|svg)($|\?)/i.test(url) || 
+                                url.includes("format=jpg") || 
+                                url.includes("format=png") ||
+                                url.includes("imgurl=");
+
+                newItems.unshift({
+                  url,
+                  type: isImage ? "image" : "link",
+                  timestamp: Date.now() + Math.random(),
+                });
+              }
+            }
+            return [...newItems, ...prevMedia];
+          });
+        }
+        return prev;
+      });
+    } else {
+
 
       const ignoredTypes = [
         "session.updated",

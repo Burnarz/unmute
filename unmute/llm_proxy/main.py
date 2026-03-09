@@ -267,6 +267,7 @@ async def _resolve_tool_calls_streaming(
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
     created, model = int(time.time()), str(body.get("model", "unknown"))
     role_emitted = False
+    global_content_acc: list[str] = []
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         logger.info("Starting tool round %d (sending %d tools to upstream)", round_idx, len(tools))
@@ -284,7 +285,7 @@ async def _resolve_tool_calls_streaming(
                 raise HTTPException(status_code=response.status_code, detail=err)
 
             current_tcs: dict[int, dict[str, Any]] = {}
-            full_content: list[str] = []
+            round_content_acc: list[str] = []
             loop_finish_reason = None
             
             async for line in response.aiter_lines():
@@ -314,7 +315,8 @@ async def _resolve_tool_calls_streaming(
                         yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
                                          "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
                         role_emitted = True
-                    full_content.append(content_piece)
+                    round_content_acc.append(content_piece)
+                    global_content_acc.append(content_piece)
                     yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
                                      "choices": [{"index": 0, "delta": {"content": content_piece}, "finish_reason": None}]})
 
@@ -339,7 +341,10 @@ async def _resolve_tool_calls_streaming(
             if current_tcs:
                 logger.info("Round %d found %d tool calls", round_idx, len(current_tcs))
                 tc_list = [v for k, v in sorted(current_tcs.items())]
-                messages.append({"role": "assistant", "content": "".join(full_content), "tool_calls": tc_list})
+                
+                # Add current assistant message to history using the ROUND accumulator
+                messages.append({"role": "assistant", "content": "".join(round_content_acc), "tool_calls": tc_list})
+                
                 for tc in tc_list:
                     name = tc["function"]["name"]
                     try: args = json.loads(tc["function"]["arguments"])
@@ -353,18 +358,13 @@ async def _resolve_tool_calls_streaming(
                     # Special handling for reset_recent_interactions
                     if name == "reset_recent_interactions" and res.get("status") == "success":
                         count = res.get("count", 0)
-                        # The count is 'interactions', where 1 interaction = 1 user + 1 assistant message (usually).
-                        # We increment count by 1 to include the current turn (the reset request itself).
                         to_remove = (count + 1) * 2
                         if len(messages) > to_remove + 1:
                             logger.info("Truncating %d messages from history (requested %d + 1 current turn)", to_remove, count)
                             idx_to_keep = max(1, len(messages) - 2 - to_remove)
                             messages = [messages[0]] + messages[idx_to_keep:]
-                        
-                        # Emit custom SSE event for the backend to sync
-                        # The backend also needs to increment count to stay in sync
                         yield _sse_line({"id": response_id, "object": "unmute.reset_history", "count": count + 1})
-            elif loop_finish_reason == "stop" or not full_content:
+            elif loop_finish_reason == "stop" or not round_content_acc:
                 logger.info("Round %d finished with stop", round_idx)
                 yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
                                  "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})

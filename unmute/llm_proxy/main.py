@@ -34,6 +34,21 @@ UPSTREAM_API_STYLE = os.environ.get("UPSTREAM_API_STYLE", "openai").strip().lowe
 TOOL_CALLING_ENABLED = os.environ.get("TOOL_CALLING_ENABLED", "1") == "1"
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "6"))
 
+# Acknowledgement phrases based on tool names
+# These are spoken to the user while the tool is executing
+TOOL_ACK_PHRASES = {
+    "get_weather": "",
+    "get_coordinates": "Laisse-moi regarder la météo.",
+    "get_jokes": "",
+    "mcp__brave-search__brave_web_search": "Je fais une recherche sur le web.",
+    "mcp__brave-search__brave_image_search": "Je cherche une image sur le web.",
+    "mcp__memory__read_graph": "Je consulte ma mémoire.",
+    "mcp__memory__search_nodes": "Je cherche dans mes souvenirs.",
+    "mcp__filesystem__list_directory": "Je regarde le contenu du dossier.",
+    "home_assistant": "Je m'occupe de ta domotique.",
+}
+DEFAULT_ACK_PHRASE = ""
+
 app = FastAPI(title="Unmute LLM Proxy")
 Instrumentator().instrument(app).expose(app)
 
@@ -268,6 +283,10 @@ async def _resolve_tool_calls_streaming(
     created, model = int(time.time()), str(body.get("model", "unknown"))
     role_emitted = False
     global_content_acc: list[str] = []
+    
+    # Track tools acknowledged in the CURRENT session to avoid repeated "Je cherche..."
+    # for the exact same tool in multiple rounds.
+    acknowledged_tools: set[str] = set()
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         logger.info("Starting tool round %d (sending %d tools to upstream)", round_idx, len(tools))
@@ -328,7 +347,38 @@ async def _resolve_tool_calls_streaming(
                             current_tcs[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
                         if tc.get("id"): current_tcs[idx]["id"] = tc["id"]
                         fn = tc.get("function", {})
-                        if fn.get("name"): current_tcs[idx]["function"]["name"] += fn["name"]
+                        if fn.get("name"): 
+                            fragment = fn["name"]
+                            current_tcs[idx]["function"]["name"] += fragment
+                            full_name = current_tcs[idx]["function"]["name"]
+                            
+                            # EAGER ACKNOWLEDGEMENT:
+                            # We check if we have already acknowledged THIS specific tool CALL (by index)
+                            # to avoid repeating the phrase for every chunk of the name.
+                            tc_ack_key = f"round_{round_idx}_idx_{idx}"
+                            if tc_ack_key not in acknowledged_tools and len(round_content_acc) < 5:
+                                # Look for a match in our phrases
+                                ack = TOOL_ACK_PHRASES.get(full_name)
+                                
+                                # If we have a full match or we're starting a tool call
+                                # (we wait for at least 3 chars to avoid false positives)
+                                if ack or len(full_name) > 3:
+                                    final_ack = ack or DEFAULT_ACK_PHRASE
+                                    logger.info("Eagerly acknowledging tool: %s (as %s)", full_name, final_ack)
+                                    
+                                    if not role_emitted:
+                                        yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+                                        role_emitted = True
+                                    
+                                    # Inject the phrase
+                                    yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                                     "choices": [{"index": 0, "delta": {"content": final_ack + " "}, "finish_reason": None}]})
+                                    
+                                    global_content_acc.append(final_ack + " ")
+                                    round_content_acc.append(final_ack + " ")
+                                    acknowledged_tools.add(tc_ack_key)
+
                         args = fn.get("arguments", "")
                         if args:
                             current_tcs[idx]["function"]["arguments"] += (json.dumps(args) if isinstance(args, dict) else args)

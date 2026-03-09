@@ -83,6 +83,39 @@ import re
 
 URL_REGEX = re.compile(r"https?://\S+")
 
+# Normalization for TTS
+_NORM_MAP = {
+    "m/s": "mètres par seconde",
+    "°C": "degrés",
+    "km/h": "kilomètres par heure",
+    "kg": "kilogrammes",
+    "€": "euros",
+    "$": "dollars",
+    "%": "pourcent",
+}
+# Match units as whole words or at the end of a word (e.g., 50m/s)
+_NORM_REGEX = re.compile(r"\b(" + "|".join(re.escape(k) for k in _NORM_MAP.keys()) + r")\b")
+_ORDINAL_REGEX = re.compile(r"\b(\d+)(er|re|e|ème)\b")
+
+def normalize_text_for_tts(text: str) -> str:
+    # 1. Fast character replacements (GPT-OSS specific)
+    text = text.replace("\u2011", "-") # Non-breaking hyphen
+    
+    # 2. Ordinals (1er -> premier, 16e -> 16ième)
+    def handle_ordinal(m):
+        num, suff = m.groups()
+        if num == "1" and suff == "er": return "premier"
+        if num == "1" and suff == "re": return "première"
+        return f"{num}ième"
+    
+    text = _ORDINAL_REGEX.sub(handle_ordinal, text)
+    
+    # 3. Units and symbols
+    text = _NORM_REGEX.sub(lambda m: _NORM_MAP[m.group(0)], text)
+    
+    return text
+
+
 class UnmuteHandler(AsyncStreamHandler):
     def __init__(self) -> None:
         super().__init__(
@@ -266,7 +299,9 @@ class UnmuteHandler(AsyncStreamHandler):
                 
                 # Only send to TTS if it's not a URL
                 if not URL_REGEX.search(delta):
-                    await tts.send(delta)
+                    # Apply TTS-specific normalization (e.g., m/s -> mètres par seconde)
+                    normalized_delta = normalize_text_for_tts(delta)
+                    await tts.send(normalized_delta)
                 else:
                     logger.debug("Skipping URL for TTS: %s", delta)
 

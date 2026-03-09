@@ -5,6 +5,9 @@ ENV UV_COMPILE_BYTECODE=1 UV_LOCKED=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs npm \
+    && npm install -g @modelcontextprotocol/server-filesystem \
+    && npm install -g @brave/brave-search-mcp-server \
+    && npm install -g @modelcontextprotocol/server-memory \
     && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=bind,source=uv.lock,target=uv.lock \

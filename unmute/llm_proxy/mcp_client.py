@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -63,6 +64,17 @@ class MCPServerProcess:
         if not self.config.install:
             return
 
+        if os.environ.get("SKIP_MCP_INSTALL") == "1":
+            logger.info("Skipping MCP install for %s (SKIP_MCP_INSTALL=1)", self.config.name)
+            return
+
+        # Check if the command is already available in PATH
+        cmd_executable = self.config.command[0]
+        if shutil.which(cmd_executable):
+            logger.info("MCP server '%s' is already installed (%s), skipping install", 
+                        self.config.name, cmd_executable)
+            return
+
         logger.info("Installing MCP server dependencies for %s", self.config.name)
         proc = await asyncio.create_subprocess_exec(
             *self.config.install,
@@ -81,7 +93,8 @@ class MCPServerProcess:
         await self._auto_install()
         errors: list[str] = []
 
-        for protocol in [MCPWireProtocol.LSP, MCPWireProtocol.JSON_LINE]:
+        # Most MCP servers use JSON_LINE. Trying it first avoids long timeouts.
+        for protocol in [MCPWireProtocol.JSON_LINE, MCPWireProtocol.LSP]:
             self._wire_protocol = protocol
             await self._spawn_process()
             try:

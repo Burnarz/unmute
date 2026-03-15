@@ -32,6 +32,24 @@
       "cwd": "/app/memory",
       "startup_timeout_sec": 30,
       "tool_timeout_sec": 15
+     },
+     {
+      "name": "google-workspace",
+      "enabled": true,
+      "command": [
+        "uv",
+        "run",
+        "--with", "mcp[cli]",
+        "--with", "google-api-python-client",
+        "--with", "google-auth-httplib2",
+        "--with", "google-auth-oauthlib",
+        "python",
+        "/app/unmute/mcp_google_workspace.py"
+      ],
+      "install": [],
+      "env": {},
+      "startup_timeout_sec": 60,
+      "tool_timeout_sec": 30
      }
   ]
 }

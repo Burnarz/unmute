@@ -7,8 +7,6 @@
     "brave_summarizer",
     "brave_local_search",
     "brave_video_search",
-    "bulk_save_gmail_attachments",
-    "delete_gmail_draft",
     "delete_observations",
     "delete_relations",
     "open_nodes"

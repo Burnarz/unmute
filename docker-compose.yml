@@ -94,6 +94,7 @@ services:
       - HOME_ASSISTANT_TOKEN=${HOME_ASSISTANT_TOKEN}
       - MEMORY_FILE_PATH=/app/memory/memory.jsonl
       - GOOGLE_TOKEN_FILE=${GOOGLE_TOKEN_FILE:-/app/GoogleTokens/credentials/test.json}
+      - SHARED_CALENDAR_ID=${SHARED_CALENDAR_ID}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

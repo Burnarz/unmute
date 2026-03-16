@@ -35,6 +35,8 @@ const Unmute = () => {
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
   const chatHistory = compressChatHistory(rawChatHistory);
   const [detectedMedia, setDetectedMedia] = useState<DetectedMedia[]>([]);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [toolStartTime, setToolStartTime] = useState<number>(0);
 
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
 
@@ -247,6 +249,17 @@ const Unmute = () => {
         }
         return prev;
       });
+    } else if (data.type === "unmute.tool_started") {
+      setActiveTool(data.tool);
+      setToolStartTime(Date.now());
+    } else if (data.type === "unmute.tool_finished") {
+      const elapsed = Date.now() - toolStartTime;
+      const minDisplay = 2000; // 2 seconds
+      if (elapsed < minDisplay) {
+        setTimeout(() => setActiveTool(null), minDisplay - elapsed);
+      } else {
+        setActiveTool(null);
+      }
     } else {
 
 
@@ -337,6 +350,16 @@ const Unmute = () => {
               isConnected={shouldConnect}
             />
           </div>
+          {activeTool && (
+            <div className="absolute z-20 pointer-events-none flex flex-col items-center animate-in fade-in zoom-in duration-500">
+              <span className="text-[10px] uppercase tracking-[0.2em] text-blue-400/80 mb-1 font-bold drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]">
+                Executing
+              </span>
+              <span className="text-sm font-medium text-white/90 bg-black/20 backdrop-blur-sm px-3 py-1 rounded-full border border-white/10">
+                {activeTool.replace("mcp__", "").replace(/__/g, ": ")}
+              </span>
+            </div>
+          )}
         </div>
         {showSubtitles && <Subtitles chatHistory={chatHistory} />}
         <MediaSidebar items={detectedMedia} />

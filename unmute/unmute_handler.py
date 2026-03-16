@@ -264,11 +264,18 @@ class UnmuteHandler(AsyncStreamHandler):
             async for item in rechunk_to_words(llm.chat_completion(messages)):
                 if not isinstance(item, str):
                     # Handle custom events from the proxy
-                    if isinstance(item, dict) and item.get("object") == "unmute.reset_history":
-                        count = item.get("count", 0)
-                        logger.info("Proxy requested history reset: %d interactions", count)
-                        self.chatbot.reset_recent_interactions(count)
-                        await self.output_queue.put(ora.UnmuteResetHistory(count=count))
+                    if isinstance(item, dict):
+                        obj = item.get("object")
+                        if obj == "unmute.reset_history":
+                            count = item.get("count", 0)
+                            logger.info("Proxy requested history reset: %d interactions", count)
+                            self.chatbot.reset_recent_interactions(count)
+                            await self.output_queue.put(ora.UnmuteResetHistory(count=count))
+                        elif obj == "unmute.tool_started":
+                            tool_name = item.get("tool", "unknown")
+                            await self.output_queue.put(ora.UnmuteToolStarted(tool=tool_name))
+                        elif obj == "unmute.tool_finished":
+                            await self.output_queue.put(ora.UnmuteToolFinished())
                     continue
 
                 delta = item

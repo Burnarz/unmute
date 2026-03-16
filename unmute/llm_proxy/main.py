@@ -375,6 +375,9 @@ async def _resolve_tool_calls_streaming(
                                     yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
                                                      "choices": [{"index": 0, "delta": {"content": final_ack + " "}, "finish_reason": None}]})
                                     
+                                    # NEW: Send a specific event for the UI to display the tool name
+                                    yield _sse_line({"id": response_id, "object": "unmute.tool_started", "tool": full_name})
+                                    
                                     global_content_acc.append(final_ack + " ")
                                     round_content_acc.append(final_ack + " ")
                                     acknowledged_tools.add(tc_ack_key)
@@ -403,6 +406,9 @@ async def _resolve_tool_calls_streaming(
                     return name, tc.get("id"), res
 
                 parallel_results = await asyncio.gather(*(run_one_tool(tc) for tc in tc_list))
+                
+                # Signal that tools are done for this round
+                yield _sse_line({"id": response_id, "object": "unmute.tool_finished"})
                 
                 for name, tc_id, res in parallel_results:
                     messages.append({"role": "tool", "name": name, "tool_call_id": tc_id or f"tc-{uuid.uuid4().hex}", 

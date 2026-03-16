@@ -29,27 +29,38 @@ const drawCircleVisualization = (
   colorName: string,
   lineWidth: number,
   animationProgress: number,
-  positioning: Positioning
+  positioning: Positioning,
+  pulseScale: number = 1.0,
+  isUser: boolean = false
 ) => {
   // Calculate scale factor from animation progress (0 = disconnected, 1 = connected)
   const scaleFactor =
-    SCALE_DISCONNECTED +
-    (SCALE_CONNECTED - SCALE_DISCONNECTED) * animationProgress;
+    (SCALE_DISCONNECTED +
+    (SCALE_CONNECTED - SCALE_DISCONNECTED) * animationProgress) * pulseScale;
 
   canvasCtx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const radius =
-      positioning.radius * sampleToNormalizedRadius(data[i]) * scaleFactor;
-    const angle = (i / data.length) * Math.PI * 2;
+  
+  if (isUser) {
+    // Perfectly round circle for user, only pulsing in diameter
+    const radius = positioning.radius * scaleFactor * 0.8; 
+    canvasCtx.arc(positioning.centerX, positioning.centerY, radius, 0, Math.PI * 2);
+  } else {
+    // Wavy circle for assistant
+    for (let i = 0; i < data.length; i++) {
+      const radius =
+        positioning.radius * sampleToNormalizedRadius(data[i]) * scaleFactor;
+      const angle = (i / data.length) * Math.PI * 2;
 
-    const x = positioning.centerX + radius * Math.cos(angle);
-    const y = positioning.centerY + radius * Math.sin(angle);
-    if (i === 0) {
-      canvasCtx.moveTo(x, y);
-    } else {
-      canvasCtx.lineTo(x, y);
+      const x = positioning.centerX + radius * Math.cos(angle);
+      const y = positioning.centerY + radius * Math.sin(angle);
+      if (i === 0) {
+        canvasCtx.moveTo(x, y);
+      } else {
+        canvasCtx.lineTo(x, y);
+      }
     }
   }
+  
   canvasCtx.closePath();
   canvasCtx.strokeStyle = getCSSVariable(colorName);
   canvasCtx.lineWidth = lineWidth;
@@ -273,6 +284,9 @@ export const useAudioVisualizerCircle = (
     };
   }, [isConnected, animationProgress]);
 
+  // Track current opacity for smooth transitions
+  const currentAlphaRef = useRef(1.0);
+
   // Main drawing effect
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -290,10 +304,33 @@ export const useAudioVisualizerCircle = (
       };
 
       const [frequencyData, timeDomainData] = getAnalyzerData(analyserNode);
-      const volumeDbfs =
-        frequencyData.reduce((a, b) => a + b, 0) / frequencyData.length;
-      const volumeNormalized = (Math.max(-100, volumeDbfs) + 100) / 100;
-      // cicleBuffer.current[circleIndex.current] = volumeNormalized;
+      
+      // Calculate instantaneous volume from time domain (RMS-like) for better pulsing
+      let sumSquares = 0;
+      for (let i = 0; i < timeDomainData.length; i++) {
+        sumSquares += timeDomainData[i] * timeDomainData[i];
+      }
+      const rms = Math.sqrt(sumSquares / timeDomainData.length);
+      // Normalize rms: typically 0 to 0.5 for loud speech
+      const volInst = Math.min(1.0, rms * 4.0); 
+
+      // Dynamic Opacity & Pulse Logic
+      let targetAlpha = 1.0;
+      let pulseScale = 1.0;
+      if (role === "user") {
+        // User circle is now constant 60% opacity
+        targetAlpha = 0.6;
+        
+        // Pulse diameter using the instantaneous volume
+        // Subtle multiplier of 0.3
+        pulseScale = 1.0 + (volInst * 0.3);
+      }
+      
+      // Fast interpolation
+      currentAlphaRef.current += (targetAlpha - currentAlphaRef.current) * 0.3;
+      
+      const volumeNormalized = volInst; // Use this for the buffer loop below
+      
       for (let i = 0; i < 1 + volumeNormalized * 10; i++) {
         cicleBuffer.current[circleIndex.current] = timeDomainData[i];
         circleIndex.current =
@@ -317,6 +354,9 @@ export const useAudioVisualizerCircle = (
       const widthScale =
         1 + 2 * Math.exp(-Math.pow(secSinceInterruption * 3, 2));
 
+      // Apply dynamic opacity
+      canvasCtx.globalAlpha = currentAlphaRef.current;
+
       drawCircleVisualization(
         canvas,
         canvasCtx,
@@ -327,8 +367,13 @@ export const useAudioVisualizerCircle = (
           WIDTH_INACTIVE * widthScale
         ),
         animationProgress,
-        currentPositioning
+        currentPositioning,
+        pulseScale,
+        !isAssistant
       );
+      
+      // Reset alpha for other drawings (like play button)
+      canvasCtx.globalAlpha = 1.0;
 
       // Draw play button if we have onClick and not fully connected
       if (showPlayButton && animationProgress < 1) {

@@ -84,10 +84,8 @@ If the user says "...", that means they haven't spoken for a while.
 You can ask if they're still there, make a comment about the silence, or something
 similar. If it happens several times, don't make the same kind of comment. Say something
 to fill the silence, or ask a question.
-If they don't answer three times, say some sort of goodbye message and end your message
-with "Bye!"
 """
-
+# If they don't answer three times, say some sort of goodbye message and end your message with "Bye!"
 
 LanguageCode = Literal["en", "fr", "en/fr", "fr/en"]
 LANGUAGE_CODE_TO_INSTRUCTIONS: dict[LanguageCode | None, str] = {

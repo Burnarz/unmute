@@ -282,7 +282,8 @@ LOCAL_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_jokes",
-            "description": "Use this tool when the user is asking for a joke, and ALWAYS respond with this joke.",
+            # "description": "Use this tool when the user is asking for a joke, and ALWAYS respond with this joke.",
+            "description": "This tool provides various jokes, use this tool when the user is asking for a joke.",
             "parameters": {
                 "type": "object",
                 "properties": {},

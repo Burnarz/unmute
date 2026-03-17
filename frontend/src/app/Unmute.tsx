@@ -25,6 +25,7 @@ import { useBackendServerUrl } from "./useBackendServerUrl";
 import { RECORDING_CONSENT_STORAGE_KEY } from "./ConsentModal";
 
 import MediaSidebar, { DetectedMedia } from "./MediaSidebar";
+import ToolApprovalPanel, { PendingToolApproval } from "./ToolApprovalPanel";
 
 const Unmute = () => {
   const { isDevMode, showSubtitles } = useKeyboardShortcuts();
@@ -37,6 +38,9 @@ const Unmute = () => {
   const [detectedMedia, setDetectedMedia] = useState<DetectedMedia[]>([]);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [toolStartTime, setToolStartTime] = useState<number>(0);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingToolApproval[]>(
+    [],
+  );
 
   const { microphoneAccess, askMicrophoneAccess } = useMicrophoneAccess();
 
@@ -252,6 +256,18 @@ const Unmute = () => {
     } else if (data.type === "unmute.tool_started") {
       setActiveTool(data.tool);
       setToolStartTime(Date.now());
+    } else if (data.type === "unmute.tool_approval_required") {
+      setPendingApprovals((prev) => {
+        const next = prev.filter(
+          (item) => item.approvalId !== data.approval_id,
+        );
+        next.unshift({
+          approvalId: data.approval_id,
+          tool: data.tool,
+          summary: data.summary,
+        });
+        return next;
+      });
     } else if (data.type === "unmute.tool_finished") {
       const elapsed = Date.now() - toolStartTime;
       const minDisplay = 2000; // 2 seconds
@@ -292,6 +308,7 @@ const Unmute = () => {
 
     setRawChatHistory([]);
     setDetectedMedia([]);
+    setPendingApprovals([]);
     sendMessage(
       JSON.stringify({
         type: "session.update",
@@ -323,6 +340,19 @@ const Unmute = () => {
     return <CouldNotConnect healthStatus={healthStatus} />;
   }
 
+  const onApprovalDecision = (approvalId: string, approved: boolean) => {
+    setPendingApprovals((prev) =>
+      prev.filter((item) => item.approvalId !== approvalId),
+    );
+    sendMessage(
+      JSON.stringify({
+        type: "unmute.tool_approval_decision",
+        approval_id: approvalId,
+        approved,
+      }),
+    );
+  };
+
   return (
     <div className="w-full">
       <ErrorMessages errors={errors} setErrors={setErrors} />
@@ -330,7 +360,12 @@ const Unmute = () => {
       <div className="relative flex w-full min-h-screen flex-col text-white bg-background items-center">
         {/* z-index on the header to put it in front of the circles */}
         <header className="static md:absolute max-w-6xl px-3 md:px-8 left-0 flex justify-start z-10">
-          <UnmuteHeader />
+          <UnmuteHeader>
+            <ToolApprovalPanel
+              approvals={pendingApprovals}
+              onDecision={onApprovalDecision}
+            />
+          </UnmuteHeader>
         </header>
         <div className="relative w-full flex items-center justify-center grow -mt-10 md:mt-0 mb-10 md:mb-0">
           <div className="absolute z-0">

@@ -162,12 +162,30 @@ def create_calendar_event(
 
 @mcp.tool()
 def delete_calendar_event(event_id: str) -> str:
-    """Delete an event from the primary calendar using its ID."""
+    """Delete an event from the primary calendar or shared calendar using its ID."""
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-        service.events().delete(calendarId='primary', eventId=event_id).execute()
-        return f"Événement {event_id} supprimé avec succès."
+        calendar_ids = ['primary']
+        shared_cal_id = os.environ.get("SHARED_CALENDAR_ID")
+        if shared_cal_id:
+            calendar_ids.append(shared_cal_id)
+
+        last_error = None
+        for calendar_id in calendar_ids:
+            try:
+                service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+                return f"Événement {event_id} supprimé avec succès."
+            except Exception as exc:
+                last_error = exc
+                logger.info(
+                    "Could not delete event %s from calendar %s: %s",
+                    event_id,
+                    calendar_id,
+                    exc,
+                )
+
+        return f"Erreur lors de la suppression : {str(last_error)}"
     except Exception as e:
         return f"Erreur lors de la suppression : {str(e)}"
 

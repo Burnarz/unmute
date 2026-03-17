@@ -133,6 +133,7 @@ class VLLMStream:
     def __init__(
         self,
         client: AsyncOpenAI,
+        session_id: str | None = None,
         temperature: float = 1.0,
     ):
         """
@@ -141,16 +142,23 @@ class VLLMStream:
         """
         self.client = client
         self.model = autoselect_model()
+        self.session_id = session_id
         self.temperature = temperature
 
     async def chat_completion(
         self, messages: list[dict[str, str]]
     ) -> AsyncIterator[str | Any]:
+        request_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": cast(Any, messages),  # Cast and hope for the best
+            "stream": True,
+            "temperature": self.temperature,
+        }
+        if self.session_id is not None:
+            request_kwargs["extra_body"] = {"unmute_session_id": self.session_id}
+
         stream = await self.client.chat.completions.create(
-            model=self.model,
-            messages=cast(Any, messages),  # Cast and hope for the best
-            stream=True,
-            temperature=self.temperature,
+            **request_kwargs,
         )
 
         async with stream:

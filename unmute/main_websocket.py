@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 from functools import cache, partial
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 import requests
@@ -79,6 +79,83 @@ _current_profile = None
 ClientEventAdapter = TypeAdapter(
     Annotated[ora.ClientEvent, Field(discriminator="type")]
 )
+
+
+class ToolApprovalRequestPayload(BaseModel):
+    session_id: str
+    tool: str
+    summary: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolApprovalResponsePayload(BaseModel):
+    approved: bool
+
+
+class ToolApprovalCoordinator:
+    def __init__(self) -> None:
+        self._handlers: dict[str, UnmuteHandler] = {}
+        self._pending: dict[str, asyncio.Future[bool]] = {}
+        self._lock = asyncio.Lock()
+
+    async def register(self, handler: UnmuteHandler) -> None:
+        async with self._lock:
+            self._handlers[handler.session_id] = handler
+
+    async def unregister(self, handler: UnmuteHandler) -> None:
+        async with self._lock:
+            current = self._handlers.get(handler.session_id)
+            if current is handler:
+                self._handlers.pop(handler.session_id, None)
+
+    async def request_approval(
+        self,
+        session_id: str,
+        tool: str,
+        summary: str,
+        arguments: dict[str, Any],
+    ) -> bool:
+        async with self._lock:
+            handler = self._handlers.get(session_id)
+            if handler is None:
+                raise HTTPException(status_code=404, detail="Unknown realtime session")
+
+            approval_id = ora.random_id("approval")
+            future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            self._pending[approval_id] = future
+
+        await handler.output_queue.put(
+            ora.UnmuteToolApprovalRequired(
+                approval_id=approval_id,
+                tool=tool,
+                summary=summary,
+                arguments=arguments,
+            )
+        )
+
+        try:
+            return await asyncio.wait_for(future, timeout=300)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=408,
+                detail="Timed out waiting for tool approval",
+            ) from exc
+        finally:
+            async with self._lock:
+                self._pending.pop(approval_id, None)
+
+    async def resolve(self, approval_id: str, approved: bool) -> bool:
+        async with self._lock:
+            future = self._pending.get(approval_id)
+            if future is None:
+                return False
+
+            if not future.done():
+                future.set_result(approved)
+            return True
+
+
+TOOL_APPROVALS = ToolApprovalCoordinator()
 
 # Allow CORS for local development
 CORS_ALLOW_ORIGINS = ["http://localhost", "http://localhost:3000"]
@@ -195,6 +272,19 @@ async def get_health():
     health = await _get_health(None)
     mt.HEALTH_OK.observe(health.ok)
     return health
+
+
+@app.post("/v1/tool-approvals/request")
+async def request_tool_approval(
+    payload: ToolApprovalRequestPayload,
+) -> ToolApprovalResponsePayload:
+    approved = await TOOL_APPROVALS.request_approval(
+        session_id=payload.session_id,
+        tool=payload.tool,
+        summary=payload.summary,
+        arguments=payload.arguments,
+    )
+    return ToolApprovalResponsePayload(approved=approved)
 
 
 @app.get("/v1/voices")
@@ -315,6 +405,7 @@ async def websocket_route(websocket: WebSocket):
 
             handler = UnmuteHandler()
             async with handler:
+                await TOOL_APPROVALS.register(handler)
                 await handler.start_up()
                 await _run_route(websocket, handler)
 
@@ -399,6 +490,7 @@ async def _run_route(websocket: WebSocket, handler: UnmuteHandler):
             tg.create_task(handler.quest_manager.wait(), name="quest_manager.wait()")
             tg.create_task(debug_running_tasks(), name="debug_running_tasks()")
     finally:
+        await TOOL_APPROVALS.unregister(handler)
         await handler.cleanup()
         logger.info("websocket_route() finished")
 
@@ -478,6 +570,20 @@ async def receive_loop(
         elif isinstance(message, ora.SessionUpdate):
             await handler.update_session(message.session)
             await emit_queue.put(ora.SessionUpdated(session=message.session))
+        elif isinstance(message, ora.UnmuteToolApprovalDecision):
+            resolved = await TOOL_APPROVALS.resolve(
+                approval_id=message.approval_id,
+                approved=message.approved,
+            )
+            if not resolved:
+                await emit_queue.put(
+                    ora.Error(
+                        error=ora.ErrorDetails(
+                            type="invalid_request_error",
+                            message="Unknown or expired tool approval request",
+                        )
+                    )
+                )
 
         elif isinstance(message, ora.UnmuteAdditionalOutputs):
             # Don't record this: it's a debugging message and can be verbose. Anything

@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -33,6 +34,15 @@ UPSTREAM_LLM_API_KEY = os.environ.get("UPSTREAM_LLM_API_KEY", "ollama")
 UPSTREAM_API_STYLE = os.environ.get("UPSTREAM_API_STYLE", "openai").strip().lower()
 TOOL_CALLING_ENABLED = os.environ.get("TOOL_CALLING_ENABLED", "1") == "1"
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "6"))
+HUMAN_APPROVAL_BACKEND_URL = os.environ.get(
+    "HUMAN_APPROVAL_BACKEND_URL", "http://backend:80"
+).rstrip("/")
+APPROVAL_REQUIRED_TOOL_NAMES = {
+    "create_event",
+    "create_calendar_event",
+    "delete_event",
+    "delete_calendar_event",
+}
 
 # Acknowledgement phrases based on tool names
 # These are spoken to the user while the tool is executing
@@ -96,6 +106,178 @@ def _get_tools_from_request(body: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(incoming, list):
         return incoming
     return []
+
+
+def _strip_internal_fields(body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in body.items()
+        if key not in {"unmute_session_id"}
+    }
+
+
+def _tool_leaf_name(tool_name: str) -> str:
+    if tool_name.startswith("mcp__"):
+        return tool_name.split("__")[-1]
+    return tool_name
+
+
+def _tool_requires_approval(tool_name: str) -> bool:
+    return _tool_leaf_name(tool_name) in APPROVAL_REQUIRED_TOOL_NAMES
+
+
+def _tool_approval_key(tool_name: str, arguments: dict[str, Any]) -> str:
+    normalized_args = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+    return f"{tool_name}:{normalized_args}"
+
+
+def _format_datetime_for_humans(value: Any) -> str | None:
+    if not isinstance(value, str) or value.strip() == "":
+        return None
+
+    normalized = value.strip().replace("Z", "+00:00")
+    if "T" not in normalized and " " in normalized:
+        normalized = normalized.replace(" ", "T", 1)
+
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return value
+
+    return dt.strftime("%d/%m/%Y a %H:%M")
+
+
+def _get_calendar_event_summary(event_id: str) -> str | None:
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+
+        token_path = Path(os.environ.get("GOOGLE_TOKEN_FILE", ""))
+        if not token_path.exists():
+            return None
+
+        data = json.loads(token_path.read_text())
+        creds = Credentials(
+            token=data.get("access_token"),
+            refresh_token=data.get("refresh_token"),
+            client_id=data.get("client_id"),
+            client_secret=data.get("client_secret"),
+            token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
+            scopes=data.get("scopes", []),
+        )
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    except Exception as exc:
+        logger.warning("Failed to resolve calendar event '%s' for approval summary: %s", event_id, exc)
+        return None
+
+    calendar_ids = ["primary"]
+    shared_calendar_id = os.environ.get("SHARED_CALENDAR_ID", "").strip()
+    if shared_calendar_id:
+        calendar_ids.append(shared_calendar_id)
+
+    event = None
+    for calendar_id in calendar_ids:
+        try:
+            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            break
+        except Exception as exc:
+            logger.info(
+                "Could not resolve event '%s' in calendar '%s': %s",
+                event_id,
+                calendar_id,
+                exc,
+            )
+
+    if event is None:
+        return None
+
+    title = str(event.get("summary") or "Sans titre")
+    start_raw = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
+    end_raw = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
+
+    start = _format_datetime_for_humans(start_raw) or "horaire inconnu"
+    end = _format_datetime_for_humans(end_raw)
+    if end is not None and end != start:
+        return f"'{title}' le {start} jusqu'a {end} (ID: {event_id})"
+    return f"'{title}' le {start} (ID: {event_id})"
+
+
+def _tool_approval_summary(tool_name: str, arguments: dict[str, Any]) -> str:
+    leaf_name = _tool_leaf_name(tool_name)
+
+    if leaf_name in {"create_event", "create_calendar_event"}:
+        title = str(arguments.get("summary") or arguments.get("title") or "Sans titre")
+        start = (
+            _format_datetime_for_humans(arguments.get("start_time"))
+            or _format_datetime_for_humans(arguments.get("start"))
+            or "horaire inconnu"
+        )
+        duration = arguments.get("duration_minutes")
+        duration_suffix = (
+            f" pour {duration} min" if isinstance(duration, int | float) else ""
+        )
+        description = str(arguments.get("description") or "").strip()
+        description_suffix = f". Notes: {description}" if description else ""
+        return (
+            f"Ajouter l'evenement '{title}' le {start}{duration_suffix}"
+            f"{description_suffix}."
+        )
+
+    if leaf_name in {"delete_event", "delete_calendar_event"}:
+        event_id = str(arguments.get("event_id") or arguments.get("id") or "inconnu")
+        summary = str(arguments.get("summary") or "").strip()
+        if summary:
+            return f"Supprimer l'evenement '{summary}' (ID: {event_id})."
+
+        resolved_summary = _get_calendar_event_summary(event_id)
+        if resolved_summary is not None:
+            return f"Supprimer l'evenement {resolved_summary}."
+
+        return f"Supprimer l'evenement avec l'identifiant {event_id}."
+
+    return f"Autoriser l'execution du tool {tool_name}."
+
+
+async def _request_tool_approval(
+    session_id: str | None, tool_name: str, arguments: dict[str, Any]
+) -> bool:
+    if not session_id or HUMAN_APPROVAL_BACKEND_URL == "":
+        raise RuntimeError(
+            f"Missing session id or approval backend URL for guarded tool {tool_name}"
+        )
+
+    payload = {
+        "session_id": session_id,
+        "tool": tool_name,
+        "summary": _tool_approval_summary(tool_name, arguments),
+        "arguments": arguments,
+    }
+    response = await (await _http()).post(
+        f"{HUMAN_APPROVAL_BACKEND_URL}/v1/tool-approvals/request",
+        json=payload,
+        timeout=300,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return bool(data.get("approved", False))
+
+
+def _approval_cancelled_result() -> dict[str, Any]:
+    return {
+        "status": "cancelled",
+        "message": (
+            "Tool execution cancelled by the user. Do not retry the same action "
+            "unless the user explicitly asks again or changes the request."
+        ),
+        "retry_allowed_without_new_user_confirmation": False,
+    }
+
+
+def _is_approval_cancelled_result(result: dict[str, Any]) -> bool:
+    return (
+        result.get("status") == "cancelled"
+        and result.get("retry_allowed_without_new_user_confirmation") is False
+    )
 
 
 def _build_tools(
@@ -277,6 +459,8 @@ async def _resolve_tool_calls_streaming(
     body: dict[str, Any],
     tools: list[dict[str, Any]],
 ) -> AsyncIterator[bytes]:
+    upstream_body = _strip_internal_fields(body)
+    session_id = body.get("unmute_session_id")
     messages: list[dict[str, Any]] = [m for m in body.get("messages", []) if isinstance(m, dict)]
     client = await _http()
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
@@ -287,15 +471,20 @@ async def _resolve_tool_calls_streaming(
     # Track tools acknowledged in the CURRENT session to avoid repeated "Je cherche..."
     # for the exact same tool in multiple rounds.
     acknowledged_tools: set[str] = set()
+    denied_approval_keys: set[str] = set()
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         logger.info("Starting tool round %d (sending %d tools to upstream)", round_idx, len(tools))
         if UPSTREAM_API_STYLE == "openai":
             url = f"{UPSTREAM_LLM_URL}/v1/chat/completions"
-            payload = _apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": True})
+            payload = _apply_openai_thinking(
+                {**upstream_body, "messages": messages, "tools": tools, "stream": True}
+            )
         else:
             url = f"{UPSTREAM_LLM_URL}/api/chat"
-            payload = _openai_to_ollama_request(body, force_stream=True, tools=tools, messages=messages)
+            payload = _openai_to_ollama_request(
+                upstream_body, force_stream=True, tools=tools, messages=messages
+            )
 
         async with client.stream("POST", url, headers=_upstream_headers(), json=payload, timeout=120) as response:
             if response.status_code >= 400:
@@ -376,7 +565,14 @@ async def _resolve_tool_calls_streaming(
                                                      "choices": [{"index": 0, "delta": {"content": final_ack + " "}, "finish_reason": None}]})
                                     
                                     # NEW: Send a specific event for the UI to display the tool name
-                                    yield _sse_line({"id": response_id, "object": "unmute.tool_started", "tool": full_name})
+                                    if not _tool_requires_approval(full_name):
+                                        yield _sse_line(
+                                            {
+                                                "id": response_id,
+                                                "object": "unmute.tool_started",
+                                                "tool": full_name,
+                                            }
+                                        )
                                     
                                     global_content_acc.append(final_ack + " ")
                                     round_content_acc.append(final_ack + " ")
@@ -398,8 +594,31 @@ async def _resolve_tool_calls_streaming(
                 # Parallel tool execution
                 async def run_one_tool(tc):
                     name = tc["function"]["name"]
-                    try: args = json.loads(tc["function"]["arguments"])
-                    except: args = {}
+                    try:
+                        args = json.loads(tc["function"]["arguments"])
+                    except Exception:
+                        args = {}
+
+                    if _tool_requires_approval(name):
+                        approval_key = _tool_approval_key(name, args)
+                        if approval_key in denied_approval_keys:
+                            logger.info(
+                                "Skipping repeated approval prompt for cancelled tool '%s'",
+                                name,
+                            )
+                            return name, tc.get("id"), _approval_cancelled_result()
+                        try:
+                            approved = await _request_tool_approval(session_id, name, args)
+                        except Exception as exc:
+                            logger.exception("Approval flow failed for tool '%s'", name)
+                            return name, tc.get("id"), {
+                                "error": f"Approval flow failed: {exc}",
+                            }
+                        if not approved:
+                            denied_approval_keys.add(approval_key)
+                            logger.info("Tool '%s' cancelled by human approval workflow", name)
+                            return name, tc.get("id"), _approval_cancelled_result()
+
                     logger.info("Executing tool: %s", name)
                     res = await _tool_result(name, args)
                     logger.info("Tool '%s' finished", name)
@@ -422,6 +641,17 @@ async def _resolve_tool_calls_streaming(
                             idx_to_keep = max(1, len(messages) - 2 - to_remove)
                             messages = [messages[0]] + messages[idx_to_keep:]
                         yield _sse_line({"id": response_id, "object": "unmute.reset_history", "count": count + 1})
+
+                if any(_is_approval_cancelled_result(res) for _name, _tc_id, res in parallel_results):
+                    if not role_emitted:
+                        yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+                    yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                     "choices": [{"index": 0, "delta": {"content": "D'accord, j'annule. "}, "finish_reason": None}]})
+                    yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
+                                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+                    yield _sse_line("[DONE]")
+                    return
             elif loop_finish_reason == "stop" or not round_content_acc:
                 logger.info("Round %d finished with stop", round_idx)
                 yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
@@ -471,9 +701,11 @@ async def models():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
+    upstream_body = _strip_internal_fields(body)
     stream = bool(body.get("stream", False))
     excl_config = load_mcp_excluded_tools()
     tools = _build_tools(excl_config.excluded_tools, _get_tools_from_request(body))
+    denied_approval_keys: set[str] = set()
 
     if not TOOL_CALLING_ENABLED or not tools:
         if stream:
@@ -481,12 +713,12 @@ async def chat_completions(request: Request):
             if UPSTREAM_API_STYLE == "openai":
                 async def ps():
                     async with c.stream("POST", f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), 
-                                        json=_apply_openai_thinking(body), timeout=120) as r:
+                                        json=_apply_openai_thinking(upstream_body), timeout=120) as r:
                         async for chunk in r.aiter_bytes(): yield chunk
                 return StreamingResponse(ps(), media_type="text/event-stream")
             
             async def ops():
-                payload = _openai_to_ollama_request(body, force_stream=True)
+                payload = _openai_to_ollama_request(upstream_body, force_stream=True)
                 async with c.stream("POST", f"{UPSTREAM_LLM_URL}/api/chat", headers=_upstream_headers(), json=payload, timeout=120) as r:
                     rid, created, model = f"chatcmpl-{uuid.uuid4().hex}", int(time.time()), str(body.get("model", "unknown"))
                     yield _sse_line({"id": rid, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
@@ -502,11 +734,11 @@ async def chat_completions(request: Request):
         
         if UPSTREAM_API_STYLE == "openai":
             c = await _http()
-            r = await c.post(f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), json=_apply_openai_thinking(body))
+            r = await c.post(f"{UPSTREAM_LLM_URL}/v1/chat/completions", headers=_upstream_headers(), json=_apply_openai_thinking(upstream_body))
             return JSONResponse(content=r.json())
         else:
             c = await _http()
-            r = await c.post(f"{UPSTREAM_LLM_URL}/api/chat", headers=_upstream_headers(), json=_openai_to_ollama_request(body, force_stream=False))
+            r = await c.post(f"{UPSTREAM_LLM_URL}/api/chat", headers=_upstream_headers(), json=_openai_to_ollama_request(upstream_body, force_stream=False))
             return JSONResponse(content=_normalize_openai_response_from_ollama(r.json()))
 
     if stream:
@@ -516,7 +748,7 @@ async def chat_completions(request: Request):
     for _ in range(MAX_TOOL_ROUNDS):
         res = await (await _http()).post(f"{UPSTREAM_LLM_URL}/v1/chat/completions" if UPSTREAM_API_STYLE == "openai" else f"{UPSTREAM_LLM_URL}/api/chat",
                                          headers=_upstream_headers(),
-                                         json=_apply_openai_thinking({**body, "messages": messages, "tools": tools, "stream": False}) if UPSTREAM_API_STYLE == "openai" else _openai_to_ollama_request(body, force_stream=False, tools=tools, messages=messages))
+                                         json=_apply_openai_thinking({**upstream_body, "messages": messages, "tools": tools, "stream": False}) if UPSTREAM_API_STYLE == "openai" else _openai_to_ollama_request(upstream_body, force_stream=False, tools=tools, messages=messages))
         
         parsed = res.json()
         if UPSTREAM_API_STYLE == "ollama": parsed = _normalize_openai_response_from_ollama(parsed)
@@ -526,8 +758,67 @@ async def chat_completions(request: Request):
         
         for tc in msg["tool_calls"]:
             name = tc["function"]["name"]
-            try: args = json.loads(tc["function"]["arguments"])
-            except: args = {}
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except Exception:
+                args = {}
+            if _tool_requires_approval(name):
+                approval_key = _tool_approval_key(name, args)
+                if approval_key in denied_approval_keys:
+                    out = _approval_cancelled_result()
+                    messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
+                    final_message = {
+                        "role": "assistant",
+                        "content": "D'accord, j'annule.",
+                    }
+                    return JSONResponse(
+                        content={
+                            "id": f"chatcmpl-{uuid.uuid4().hex}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": body.get("model", "unknown"),
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": final_message,
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": parsed.get("usage", {}),
+                        }
+                    )
+                try:
+                    approved = await _request_tool_approval(
+                        body.get("unmute_session_id"), name, args
+                    )
+                except Exception as exc:
+                    out = {"error": f"Approval flow failed: {exc}"}
+                    messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
+                    continue
+                if not approved:
+                    denied_approval_keys.add(approval_key)
+                    out = _approval_cancelled_result()
+                    messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
+                    final_message = {
+                        "role": "assistant",
+                        "content": "D'accord, j'annule.",
+                    }
+                    return JSONResponse(
+                        content={
+                            "id": f"chatcmpl-{uuid.uuid4().hex}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": body.get("model", "unknown"),
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": final_message,
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": parsed.get("usage", {}),
+                        }
+                    )
             out = await _tool_result(name, args)
             messages.append({"role": "tool", "name": name, "tool_call_id": tc["id"], "content": json.dumps(out, ensure_ascii=False)})
     

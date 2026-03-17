@@ -177,6 +177,18 @@ class UnmuteToolStarted(BaseEvent[Literal["unmute.tool_started"]]):
     tool: str
 
 
+class UnmuteToolApprovalRequired(BaseEvent[Literal["unmute.tool_approval_required"]]):
+    approval_id: str
+    tool: str
+    summary: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnmuteToolApprovalDecision(BaseEvent[Literal["unmute.tool_approval_decision"]]):
+    approval_id: str
+    approved: bool
+
+
 class UnmuteToolFinished(BaseEvent[Literal["unmute.tool_finished"]]):
     pass
 
@@ -202,6 +214,7 @@ ServerEvent = Union[
     UnmuteResponseAudioDeltaReady,
     UnmuteResetHistory,
     UnmuteToolStarted,
+    UnmuteToolApprovalRequired,
     UnmuteToolFinished,
     UnmuteInterruptedByVAD,
 ]
@@ -210,6 +223,7 @@ ServerEvent = Union[
 ClientEvent = Union[
     SessionUpdate,
     InputAudioBufferAppend,
+    UnmuteToolApprovalDecision,
     # Used internally for recording, we're not expecting the user to send this
     UnmuteInputAudioBufferAppendAnonymized,
 ]

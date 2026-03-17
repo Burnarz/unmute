@@ -103,15 +103,35 @@ def get_readable_llm_name():
     return model.replace("-", " ").replace("_", " ")
 
 
+def get_current_time_context() -> dict[str, str]:
+    now = datetime.datetime.now().astimezone()
+    return {
+        "current_time": now.strftime("%A, %B %d, %Y at %H:%M"),
+        "timezone": now.tzname() or "unknown timezone",
+    }
+
+
+CONSTANT_INSTRUCTIONS = """
+{additional_instructions}
+
+# CONTEXT
+Don't mention it, it's for you. It's currently {current_time} in your timezone ({timezone}).
+"""
+
+
 class ConstantInstructions(BaseModel):
     type: Literal["constant"] = "constant"
     text: str = _DEFAULT_ADDITIONAL_INSTRUCTIONS
     language: LanguageCode | None = None
 
     def make_system_prompt(self) -> str:
+        additional_instructions = CONSTANT_INSTRUCTIONS.format(
+            additional_instructions=self.text,
+            **get_current_time_context(),
+        )
         return _SYSTEM_PROMPT_TEMPLATE.format(
             _SYSTEM_PROMPT_BASICS=_SYSTEM_PROMPT_BASICS,
-            additional_instructions=self.text,
+            additional_instructions=additional_instructions,
             language_instructions=LANGUAGE_CODE_TO_INSTRUCTIONS[self.language],
             llm_name=get_readable_llm_name(),
         )
@@ -165,10 +185,10 @@ class SmalltalkInstructions(BaseModel):
         self,
         additional_instructions: str = _DEFAULT_ADDITIONAL_INSTRUCTIONS,
     ) -> str:
+        time_context = get_current_time_context()
         additional_instructions = SMALLTALK_INSTRUCTIONS.format(
             additional_instructions=additional_instructions,
-            current_time=datetime.datetime.now().strftime("%A, %B %d, %Y at %H:%M"),
-            timezone=datetime.datetime.now().astimezone().tzname(),
+            **time_context,
             conversation_starter_suggestion=random.choice(
                 CONVERSATION_STARTER_SUGGESTIONS
             ),
@@ -338,8 +358,7 @@ class NewsInstructions(BaseModel):
             _SYSTEM_PROMPT_BASICS=_SYSTEM_PROMPT_BASICS,
             additional_instructions=NEWS_INSTRUCTIONS.format(
                 news=articles_serialized,
-                current_time=datetime.datetime.now().strftime("%A, %B %d, %Y at %H:%M"),
-                timezone=datetime.datetime.now().astimezone().tzname(),
+                **get_current_time_context(),
             ),
             language_instructions=LANGUAGE_CODE_TO_INSTRUCTIONS[self.language],
             llm_name=get_readable_llm_name(),

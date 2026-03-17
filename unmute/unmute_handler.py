@@ -124,6 +124,7 @@ class UnmuteHandler(AsyncStreamHandler):
             output_frame_size=480,
             output_sample_rate=SAMPLE_RATE,
         )
+        self.session_id = ora.random_id("session")
         self.n_samples_received = 0  # Used for measuring time
         self.output_queue: asyncio.Queue[HandlerOutput] = asyncio.Queue()
         self.recorder = Recorder(RECORDINGS_DIR) if RECORDINGS_DIR else None
@@ -240,6 +241,7 @@ class UnmuteHandler(AsyncStreamHandler):
             # if generating_message_i is 2, then we have a system prompt + an empty
             # assistant message signalling that we are generating a response.
             self.openai_client,
+            session_id=self.session_id,
             temperature=FIRST_MESSAGE_TEMPERATURE
             if generating_message_i == 2
             else FURTHER_MESSAGES_TEMPERATURE,

@@ -2,6 +2,8 @@ import { useRef, useEffect, useState } from "react";
 import { getCSSVariable } from "./cssUtil";
 import { ChatMessage } from "./chatHistory";
 
+import { VisualizerStyle } from "./UnmuteConfigurator";
+
 const WIDTH_INACTIVE = 3;
 const WIDTH_ACTIVE = 5;
 
@@ -31,40 +33,99 @@ const drawCircleVisualization = (
   animationProgress: number,
   positioning: Positioning,
   pulseScale: number = 1.0,
-  isUser: boolean = false
+  isUser: boolean = false,
+  style: VisualizerStyle = "classic"
 ) => {
   // Calculate scale factor from animation progress (0 = disconnected, 1 = connected)
   const scaleFactor =
     (SCALE_DISCONNECTED +
     (SCALE_CONNECTED - SCALE_DISCONNECTED) * animationProgress) * pulseScale;
 
-  canvasCtx.beginPath();
-  
+  const color = getCSSVariable(colorName);
+  canvasCtx.strokeStyle = color;
+
   if (isUser) {
     // Perfectly round circle for user, only pulsing in diameter
     const radius = positioning.radius * scaleFactor * 0.8; 
+    canvasCtx.beginPath();
     canvasCtx.arc(positioning.centerX, positioning.centerY, radius, 0, Math.PI * 2);
+    canvasCtx.lineWidth = lineWidth;
+    canvasCtx.stroke();
   } else {
-    // Wavy circle for assistant
-    for (let i = 0; i < data.length; i++) {
-      const radius =
-        positioning.radius * sampleToNormalizedRadius(data[i]) * scaleFactor;
-      const angle = (i / data.length) * Math.PI * 2;
+    // JARVIS STYLE for Assistant
+    const time = performance.now() / 1000;
+    const baseRadius = positioning.radius * scaleFactor;
 
-      const x = positioning.centerX + radius * Math.cos(angle);
-      const y = positioning.centerY + radius * Math.sin(angle);
-      if (i === 0) {
-        canvasCtx.moveTo(x, y);
-      } else {
-        canvasCtx.lineTo(x, y);
+    // 1. Rotating HUD Ring (Dashed) - Kept for all styles
+    canvasCtx.save();
+    canvasCtx.beginPath();
+    canvasCtx.setLineDash([2, 10]);
+    canvasCtx.lineWidth = 1;
+    canvasCtx.globalAlpha = 0.3 * animationProgress;
+    canvasCtx.arc(positioning.centerX, positioning.centerY, baseRadius * 0.75, time * 0.5, time * 0.5 + Math.PI * 2);
+    canvasCtx.stroke();
+    canvasCtx.restore();
+
+    // 2. Main Visualization Style
+    if (style === "classic") {
+      // Original Double Energy Waves
+      for (const offset of [0, 1]) {
+        canvasCtx.beginPath();
+        canvasCtx.lineWidth = offset === 0 ? lineWidth : lineWidth / 2;
+        canvasCtx.globalAlpha = offset === 0 ? 1.0 : 0.5;
+        if (offset === 0) { canvasCtx.shadowBlur = 15; canvasCtx.shadowColor = color; }
+        else { canvasCtx.shadowBlur = 0; }
+
+        for (let i = 0; i < data.length; i++) {
+          const multiplier = offset === 0 ? 1.0 : 0.98;
+          const radius = baseRadius * sampleToNormalizedRadius(data[i]) * multiplier;
+          const angle = (i / data.length) * Math.PI * 2;
+          const x = positioning.centerX + radius * Math.cos(angle);
+          const y = positioning.centerY + radius * Math.sin(angle);
+          if (i === 0) canvasCtx.moveTo(x, y);
+          else canvasCtx.lineTo(x, y);
+        }
+        canvasCtx.closePath();
+        canvasCtx.stroke();
+      }
+    } else {
+      // POLAR STYLE (Default and only other option)
+      canvasCtx.shadowBlur = 10;
+      canvasCtx.shadowColor = color;
+      const barCount = 64;
+      const step = Math.floor(data.length / barCount);
+      for (let i = 0; i < barCount; i++) {
+        const audioValue = Math.abs(data[i * step]);
+        
+        // IDLE ANIMATION: Add a base movement even if silence
+        // A combination of sines at different frequencies for an "organic" feel
+        const idleNoise = (
+          Math.sin(time * 2 + i * 0.2) * 0.05 + 
+          Math.sin(time * 5 - i * 0.1) * 0.02
+        ) * animationProgress; // Only if connected
+        
+        const finalValue = Math.max(0.02 * animationProgress, audioValue + idleNoise);
+        const barHeight = finalValue * baseRadius * 0.4;
+        const angle = (i / barCount) * Math.PI * 2 + time * 0.1;
+        
+        const innerRadius = baseRadius * 0.85;
+        const x1 = positioning.centerX + innerRadius * Math.cos(angle);
+        const y1 = positioning.centerY + innerRadius * Math.sin(angle);
+        const x2 = positioning.centerX + (innerRadius + barHeight) * Math.cos(angle);
+        const y2 = positioning.centerY + (innerRadius + barHeight) * Math.sin(angle);
+        
+        canvasCtx.beginPath();
+        canvasCtx.lineWidth = 2;
+        canvasCtx.moveTo(x1, y1);
+        canvasCtx.lineTo(x2, y2);
+        canvasCtx.stroke();
       }
     }
+    
+    // Clean up
+    canvasCtx.shadowBlur = 0;
+    canvasCtx.globalAlpha = 1.0;
   }
-  
-  canvasCtx.closePath();
-  canvasCtx.strokeStyle = getCSSVariable(colorName);
-  canvasCtx.lineWidth = lineWidth;
-  canvasCtx.stroke();
 };
 
 // New function to draw a play triangle
@@ -168,6 +229,7 @@ export interface UseAudioVisualizerCircleOptions {
   showPlayButton?: boolean;
   positioning?: Positioning;
   clearCanvas: boolean;
+  visualizerStyle?: VisualizerStyle;
 }
 
 export const useAudioVisualizerCircle = (
@@ -182,6 +244,7 @@ export const useAudioVisualizerCircle = (
     showPlayButton = false,
     positioning,
     clearCanvas,
+    visualizerStyle = "classic",
   } = options;
 
   const isActive = getIsActive(chatHistory, role);
@@ -317,9 +380,14 @@ export const useAudioVisualizerCircle = (
       // Dynamic Opacity & Pulse Logic
       let targetAlpha = 1.0;
       let pulseScale = 1.0;
+      let currentLineWidth = isActive ? WIDTH_ACTIVE : WIDTH_INACTIVE;
+
       if (role === "user") {
-        // User circle is now constant 60% opacity
-        targetAlpha = 0.6;
+        // User circle is now constant 20% opacity
+        targetAlpha = 0.2;
+        
+        // Use a thinner line for user
+        currentLineWidth = 3;
         
         // Pulse diameter using the instantaneous volume
         // Subtle multiplier of 0.3
@@ -362,14 +430,12 @@ export const useAudioVisualizerCircle = (
         canvasCtx,
         cicleBuffer.current,
         colorName,
-        Math.max(
-          isActive ? WIDTH_ACTIVE : WIDTH_INACTIVE,
-          WIDTH_INACTIVE * widthScale
-        ),
+        currentLineWidth * (role === "assistant" ? widthScale : 1),
         animationProgress,
         currentPositioning,
         pulseScale,
-        !isAssistant
+        !isAssistant,
+        visualizerStyle
       );
       
       // Reset alpha for other drawings (like play button)

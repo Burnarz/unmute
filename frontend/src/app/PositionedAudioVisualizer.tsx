@@ -3,18 +3,22 @@ import { ChatMessage } from "./chatHistory";
 import { useAudioVisualizerCircle } from "./useAudioVisualizerCircle";
 import { useEffect, useRef } from "react";
 
+import { VisualizerStyle } from "./UnmuteConfigurator";
+
 const PositionedAudioVisualizer = ({
   chatHistory,
   role,
   analyserNode,
   isConnected,
   onCircleClick,
+  visualizerStyle = "classic",
 }: {
   chatHistory: ChatMessage[];
   role: "user" | "assistant";
   analyserNode: AnalyserNode | null;
   isConnected: boolean;
   onCircleClick?: () => void;
+  visualizerStyle?: VisualizerStyle;
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isAssistant = role === "assistant";
@@ -26,6 +30,7 @@ const PositionedAudioVisualizer = ({
     isConnected,
     showPlayButton: !!onCircleClick,
     clearCanvas: true,
+    visualizerStyle,
   });
 
   // Resize the canvas to fit its parent element
@@ -50,7 +55,7 @@ const PositionedAudioVisualizer = ({
       <div
         className={clsx(
           isAssistant
-            ? "w-44 md:w-56 2xl:w-64"
+            ? "w-[calc(11rem-40px)] md:w-[calc(14rem-40px)] 2xl:w-[calc(16rem-40px)]"
             : "w-[calc(11rem+40px)] md:w-[calc(14rem+40px)] 2xl:w-[calc(16rem+40px)]"
         )}
       >

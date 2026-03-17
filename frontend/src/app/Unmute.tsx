@@ -339,6 +339,7 @@ const Unmute = () => {
               role={"assistant"}
               analyserNode={audioProcessor.current?.outputAnalyser || null}
               isConnected={shouldConnect}
+              visualizerStyle={unmuteConfig.visualizerStyle}
             />
           </div>
           <div className="absolute z-10">
@@ -348,6 +349,7 @@ const Unmute = () => {
               analyserNode={audioProcessor.current?.inputAnalyser || null}
               onCircleClick={onConnectButtonPress}
               isConnected={shouldConnect}
+              visualizerStyle={unmuteConfig.visualizerStyle}
             />
           </div>
           {activeTool && (

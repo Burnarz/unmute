@@ -20,6 +20,8 @@ export type Instructions =
   | { type: "guess_animal"; language?: LanguageCode }
   | { type: "quiz_show"; language?: LanguageCode };
 
+export type VisualizerStyle = "classic" | "polar";
+
 export type UnmuteConfig = {
   instructions: Instructions;
   voice: string;
@@ -27,6 +29,7 @@ export type UnmuteConfig = {
   voiceName: string;
   // The backend doesn't care about this, we use it for analytics
   isCustomInstructions: boolean;
+  visualizerStyle: VisualizerStyle;
 };
 
 // Will be overridden immediately by the voices fetched from the backend
@@ -38,6 +41,7 @@ export const DEFAULT_UNMUTE_CONFIG: UnmuteConfig = {
   voice: "barack_demo.wav",
   voiceName: "Missing voice",
   isCustomInstructions: false,
+  visualizerStyle: "polar",
 };
 
 export type FreesoundVoiceSource = {
@@ -261,7 +265,7 @@ const UnmuteConfigurator = ({
       {/* Gray background div, full width */}
       <div className="w-full md:bg-gray flex flex-col items-center">
         <div className="w-full max-w-6xl grid grid-flow-row grid-cols-1 md:grid-cols-2 gap-3 p-3">
-          <div>
+          <div className="flex flex-col gap-3">
             <div className="grid grid-flow-row grid-cols-2 md:grid-cols-3 gap-3">
               {voices &&
                 voices.map((voice) => (
@@ -269,6 +273,7 @@ const UnmuteConfigurator = ({
                     key={voice.source.path_on_server}
                     onClick={() => {
                       setConfig({
+                        ...config,
                         voice: voice.source.path_on_server,
                         voiceName: voice.name || "Unnamed",
                         instructions:

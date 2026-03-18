@@ -37,7 +37,11 @@ def get_google_credentials():
 
 @mcp.tool()
 def get_next_calendar_events(max_results: int = 10) -> str:
-    """Read upcoming appointments and events from the user's primary calendar and shared calendars. Useful when the user asks about their plans or their wife's plans."""
+    """Read upcoming appointments and events from the user's primary calendar and shared calendars.
+
+    Useful when the user asks about their plans or wants to identify an event before deleting it.
+    Includes event IDs that can be passed to `delete_calendar_event`.
+    """
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
@@ -94,6 +98,7 @@ def get_next_calendar_events(max_results: int = 10) -> str:
 def get_daily_agenda(date_str: str = None) -> str:
     """Get all events for a specific day. If date_str is None, it defaults to today.
     date_str should be in 'YYYY-MM-DD' format.
+    Includes event IDs so you can identify an event before deleting it.
     """
     try:
         creds = get_google_credentials()
@@ -121,7 +126,7 @@ def get_daily_agenda(date_str: str = None) -> str:
             start = event['start'].get('dateTime', 'Journée entière')
             if 'T' in start:
                 start = datetime.datetime.fromisoformat(start.replace('Z', '+00:00')).strftime('%H:%M')
-            result += f"- {start}: {event.get('summary', 'Sans titre')}\n"
+            result += f"- {start}: {event.get('summary', 'Sans titre')} (ID: {event.get('id')})\n"
         return result
     except Exception as e:
         return f"Erreur lors de la récupération de l'agenda : {str(e)}"
@@ -160,9 +165,55 @@ def create_calendar_event(
     except Exception as e:
         return f"Erreur lors de la création : {str(e)}"
 
+
+@mcp.tool()
+def get_calendar_event_details(event_id: str) -> dict:
+    """Get calendar event details by ID from the primary or shared calendar."""
+    try:
+        creds = get_google_credentials()
+        service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
+        calendars = [{'id': 'primary', 'name': 'Votre calendrier'}]
+
+        shared_cal_id = os.environ.get("SHARED_CALENDAR_ID")
+        if shared_cal_id:
+            calendars.append({'id': shared_cal_id, 'name': 'Calendrier partagé'})
+
+        last_error = None
+        for calendar in calendars:
+            try:
+                event = service.events().get(
+                    calendarId=calendar['id'],
+                    eventId=event_id,
+                ).execute()
+                return {
+                    "event_id": event_id,
+                    "summary": event.get('summary', 'Sans titre'),
+                    "start": event.get('start', {}).get('dateTime', event.get('start', {}).get('date')),
+                    "end": event.get('end', {}).get('dateTime', event.get('end', {}).get('date')),
+                    "calendar_id": calendar['id'],
+                    "calendar_name": calendar['name'],
+                }
+            except Exception as exc:
+                last_error = exc
+                logger.info(
+                    "Could not fetch event %s from calendar %s: %s",
+                    event_id,
+                    calendar['id'],
+                    exc,
+                )
+
+        return {"error": f"Erreur lors de la récupération de l'événement : {last_error}"}
+    except Exception as e:
+        return {"error": f"Erreur lors de la récupération de l'événement : {str(e)}"}
+
+
 @mcp.tool()
 def delete_calendar_event(event_id: str) -> str:
-    """Delete an event from the primary calendar or shared calendar using its ID."""
+    """Delete an event from the primary calendar or shared calendar using its ID.
+
+    If you do not know the event ID yet, first call `get_next_calendar_events` or
+    `get_daily_agenda` to retrieve the matching event and its ID.
+    """
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)

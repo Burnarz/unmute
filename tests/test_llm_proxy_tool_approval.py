@@ -1,9 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import sys
-import types
+import asyncio
 from unittest.mock import patch
-import os
 
 from unmute.llm_proxy.main import (
     _approval_cancelled_result,
@@ -84,14 +82,16 @@ def test_normalize_create_event_arguments_prefers_latest_user_message():
 
 
 def test_tool_approval_summary_for_create_calendar_event():
-    summary = _tool_approval_summary(
-        "create_calendar_event",
-        {
-            "summary": "Fleuriste",
-            "start_time": "2026-03-18T15:00:00+00:00",
-            "duration_minutes": 45,
-            "description": "Commander un bouquet",
-        },
+    summary = asyncio.run(
+        _tool_approval_summary(
+            "create_calendar_event",
+            {
+                "summary": "Fleuriste",
+                "start_time": "2026-03-18T15:00:00+00:00",
+                "duration_minutes": 45,
+                "description": "Commander un bouquet",
+            },
+        )
     )
 
     assert "Fleuriste" in summary
@@ -101,9 +101,11 @@ def test_tool_approval_summary_for_create_calendar_event():
 
 
 def test_tool_approval_summary_for_delete_calendar_event():
-    summary = _tool_approval_summary(
-        "delete_calendar_event",
-        {"event_id": "abc123", "summary": "Dentiste"},
+    summary = asyncio.run(
+        _tool_approval_summary(
+            "delete_calendar_event",
+            {"event_id": "abc123", "summary": "Dentiste"},
+        )
     )
 
     assert summary == "Supprimer l'evenement 'Dentiste' (ID: abc123)."
@@ -114,63 +116,90 @@ def test_tool_approval_summary_for_delete_calendar_event_resolves_event_details(
         "unmute.llm_proxy.main._get_calendar_event_summary",
         return_value="'Dentiste' le 18/03/2026 a 15:00 (ID: abc123)",
     ):
-        summary = _tool_approval_summary(
-            "delete_calendar_event",
-            {"event_id": "abc123"},
+        summary = asyncio.run(
+            _tool_approval_summary(
+                "delete_calendar_event",
+                {"event_id": "abc123"},
+            )
         )
 
     assert summary == "Supprimer l'evenement 'Dentiste' le 18/03/2026 a 15:00 (ID: abc123)."
 
 
-def test_get_calendar_event_summary_tries_shared_calendar_after_primary():
-    fake_event = {
-        "summary": "Dentiste",
-        "start": {"dateTime": "2026-03-18T15:00:00+00:00"},
-        "end": {"dateTime": "2026-03-18T15:30:00+00:00"},
-    }
-
-    class FakeEvents:
-        def __init__(self):
-            self.calls = []
-
-        def get(self, calendarId: str, eventId: str):
-            self.calls.append((calendarId, eventId))
-
-            class Execute:
-                def execute(inner_self):
-                    if calendarId == "primary":
-                        raise Exception("not found")
-                    return fake_event
-
-            return Execute()
-
-    fake_events = FakeEvents()
-
-    class FakeService:
-        def events(self):
-            return fake_events
-
-    with (
-        patch.dict(os.environ, {"GOOGLE_TOKEN_FILE": "/tmp/fake-token.json", "SHARED_CALENDAR_ID": "shared"}, clear=False),
-        patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.read_text", return_value='{"access_token":"a","refresh_token":"b","client_id":"c","client_secret":"d","scopes":["scope"]}'),
-        patch.dict(
-            sys.modules,
-            {
-                "google.oauth2.credentials": types.SimpleNamespace(
-                    Credentials=lambda **kwargs: object()
-                ),
-                "googleapiclient.discovery": types.SimpleNamespace(
-                    build=lambda *args, **kwargs: FakeService()
-                ),
-            },
-        ),
+def test_tool_approval_summary_for_delete_calendar_event_requires_resolved_details():
+    with patch(
+        "unmute.llm_proxy.main._get_calendar_event_summary",
+        return_value=None,
     ):
+        summary = asyncio.run(
+            _tool_approval_summary(
+                "delete_calendar_event",
+                {"event_id": "abc123"},
+            )
+        )
+
+    assert summary == "Supprimer l'evenement avec l'identifiant abc123."
+
+
+def test_get_calendar_event_summary_tries_shared_calendar_after_primary():
+    class FakeMCPManager:
+        async def call(self, openai_tool_name: str, arguments: dict[str, str]) -> dict[str, str]:
+            assert openai_tool_name == "mcp__google-workspace__get_calendar_event_details"
+            assert arguments == {"event_id": "abc123"}
+            return {
+                "summary": "Dentiste",
+                "start": "2026-03-18T15:00:00+00:00",
+                "end": "2026-03-18T15:30:00+00:00",
+            }
+
+    with patch("unmute.llm_proxy.main._mcp_manager", new=FakeMCPManager()):
         from unmute.llm_proxy.main import _get_calendar_event_summary
 
-        summary = _get_calendar_event_summary("abc123")
+        summary = asyncio.run(_get_calendar_event_summary("abc123"))
 
-    assert fake_events.calls == [("primary", "abc123"), ("shared", "abc123")]
+    assert summary == "'Dentiste' le 18/03/2026 a 15:00 jusqu'a 18/03/2026 a 15:30 (ID: abc123)"
+
+
+def test_get_calendar_event_summary_reads_mcp_structured_content():
+    class FakeMCPManager:
+        async def call(self, openai_tool_name: str, arguments: dict[str, str]) -> dict[str, object]:
+            assert openai_tool_name == "mcp__google-workspace__get_calendar_event_details"
+            assert arguments == {"event_id": "abc123"}
+            return {
+                "structuredContent": {
+                    "summary": "Dentiste",
+                    "start": "2026-03-18T15:00:00+00:00",
+                    "end": "2026-03-18T15:30:00+00:00",
+                }
+            }
+
+    with patch("unmute.llm_proxy.main._mcp_manager", new=FakeMCPManager()):
+        from unmute.llm_proxy.main import _get_calendar_event_summary
+
+        summary = asyncio.run(_get_calendar_event_summary("abc123"))
+
+    assert summary == "'Dentiste' le 18/03/2026 a 15:00 jusqu'a 18/03/2026 a 15:30 (ID: abc123)"
+
+
+def test_get_calendar_event_summary_reads_mcp_content_json():
+    class FakeMCPManager:
+        async def call(self, openai_tool_name: str, arguments: dict[str, str]) -> dict[str, object]:
+            assert openai_tool_name == "mcp__google-workspace__get_calendar_event_details"
+            assert arguments == {"event_id": "abc123"}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"summary":"Dentiste","start":"2026-03-18T15:00:00+00:00","end":"2026-03-18T15:30:00+00:00"}',
+                    }
+                ]
+            }
+
+    with patch("unmute.llm_proxy.main._mcp_manager", new=FakeMCPManager()):
+        from unmute.llm_proxy.main import _get_calendar_event_summary
+
+        summary = asyncio.run(_get_calendar_event_summary("abc123"))
+
     assert summary == "'Dentiste' le 18/03/2026 a 15:00 jusqu'a 18/03/2026 a 15:30 (ID: abc123)"
 
 

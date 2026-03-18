@@ -9,7 +9,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -265,62 +264,58 @@ def _format_datetime_for_humans(value: Any) -> str | None:
     return dt.strftime("%d/%m/%Y a %H:%M")
 
 
-def _get_calendar_event_summary(event_id: str) -> str | None:
-    try:
-        from google.oauth2.credentials import Credentials
-        from googleapiclient.discovery import build
-
-        token_path = Path(os.environ.get("GOOGLE_TOKEN_FILE", ""))
-        if not token_path.exists():
-            return None
-
-        data = json.loads(token_path.read_text())
-        creds = Credentials(
-            token=data.get("access_token"),
-            refresh_token=data.get("refresh_token"),
-            client_id=data.get("client_id"),
-            client_secret=data.get("client_secret"),
-            token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
-            scopes=data.get("scopes", []),
+async def _get_calendar_event_summary(event_id: str) -> str | None:
+    if _mcp_manager is None:
+        logger.warning(
+            "Falling back to event ID only for delete approval summary because MCP manager is unavailable (event_id=%s)",
+            event_id,
         )
-        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    except Exception as exc:
-        logger.warning("Failed to resolve calendar event '%s' for approval summary: %s", event_id, exc)
         return None
 
-    calendar_ids = ["primary"]
-    shared_calendar_id = os.environ.get("SHARED_CALENDAR_ID", "").strip()
-    if shared_calendar_id:
-        calendar_ids.append(shared_calendar_id)
-
-    event = None
-    for calendar_id in calendar_ids:
-        try:
-            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
-            break
-        except Exception as exc:
-            logger.info(
-                "Could not resolve event '%s' in calendar '%s': %s",
-                event_id,
-                calendar_id,
-                exc,
-            )
-
-    if event is None:
+    result = await _mcp_manager.call(
+        "mcp__google-workspace__get_calendar_event_details",
+        {"event_id": event_id},
+    )
+    if "error" in result:
+        logger.warning(
+            "Falling back to event ID only for delete approval summary (event_id=%s, error=%s)",
+            event_id,
+            result.get("error"),
+        )
         return None
 
-    title = str(event.get("summary") or "Sans titre")
-    start_raw = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
-    end_raw = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
+    event_data = result
+    structured_content = result.get("structuredContent")
+    if isinstance(structured_content, dict):
+        event_data = structured_content
+    elif isinstance(result.get("result"), dict):
+        event_data = result["result"]
+    else:
+        content = result.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    event_data = parsed
+                    break
 
-    start = _format_datetime_for_humans(start_raw) or "horaire inconnu"
-    end = _format_datetime_for_humans(end_raw)
+    title = str(event_data.get("summary") or "Sans titre")
+    start = _format_datetime_for_humans(event_data.get("start")) or "horaire inconnu"
+    end = _format_datetime_for_humans(event_data.get("end"))
     if end is not None and end != start:
         return f"'{title}' le {start} jusqu'a {end} (ID: {event_id})"
     return f"'{title}' le {start} (ID: {event_id})"
 
 
-def _tool_approval_summary(tool_name: str, arguments: dict[str, Any]) -> str:
+async def _tool_approval_summary(tool_name: str, arguments: dict[str, Any]) -> str:
     leaf_name = _tool_leaf_name(tool_name)
 
     if leaf_name in {"create_event", "create_calendar_event"}:
@@ -347,7 +342,7 @@ def _tool_approval_summary(tool_name: str, arguments: dict[str, Any]) -> str:
         if summary:
             return f"Supprimer l'evenement '{summary}' (ID: {event_id})."
 
-        resolved_summary = _get_calendar_event_summary(event_id)
+        resolved_summary = await _get_calendar_event_summary(event_id)
         if resolved_summary is not None:
             return f"Supprimer l'evenement {resolved_summary}."
 
@@ -367,7 +362,7 @@ async def _request_tool_approval(
     payload = {
         "session_id": session_id,
         "tool": tool_name,
-        "summary": _tool_approval_summary(tool_name, arguments),
+        "summary": await _tool_approval_summary(tool_name, arguments),
         "arguments": arguments,
     }
     response = await (await _http()).post(

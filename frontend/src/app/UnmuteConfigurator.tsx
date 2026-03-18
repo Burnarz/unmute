@@ -35,10 +35,11 @@ export type UnmuteConfig = {
 // Will be overridden immediately by the voices fetched from the backend
 export const DEFAULT_UNMUTE_CONFIG: UnmuteConfig = {
   instructions: {
-    type: "smalltalk",
+    type: "constant",
+    text: "",
     language: "en/fr",
   },
-  voice: "barack_demo.wav",
+  voice: "jarvis",
   voiceName: "Missing voice",
   isCustomInstructions: false,
   visualizerStyle: "polar",
@@ -127,6 +128,19 @@ const getVoiceName = (voice: VoiceSample) => {
   );
 };
 
+const isJarvisVoice = (voice: VoiceSample) => {
+  const candidates = [
+    voice.name,
+    getVoiceName(voice),
+    voice.comment,
+    voice.source.path_on_server,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.toLowerCase());
+
+  return candidates.some((value) => value.includes("jarvis"));
+};
+
 const UnmuteConfigurator = ({
   config,
   backendServerUrl,
@@ -153,15 +167,18 @@ const UnmuteConfigurator = ({
         const englishVoices = voicesData.filter(
           (voice) => (voice.instructions?.language || "en") === "en"
         );
-        const randomVoice =
-          englishVoices[Math.floor(Math.random() * englishVoices.length)];
+        const jarvisVoice = voicesData.find(isJarvisVoice);
+        const preferredPool = englishVoices.length > 0 ? englishVoices : voicesData;
+        const fallbackVoice =
+          preferredPool[Math.floor(Math.random() * preferredPool.length)];
+        const initialVoice = jarvisVoice || fallbackVoice;
 
         setConfig({
           ...config,
-          voice: randomVoice.source.path_on_server,
-          voiceName: getVoiceName(randomVoice),
+          voice: initialVoice.source.path_on_server,
+          voiceName: getVoiceName(initialVoice),
           instructions:
-            randomVoice.instructions || DEFAULT_UNMUTE_CONFIG.instructions,
+            initialVoice.instructions || DEFAULT_UNMUTE_CONFIG.instructions,
         });
       }
     };

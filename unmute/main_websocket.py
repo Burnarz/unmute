@@ -8,6 +8,7 @@ from typing import Annotated, Any
 import numpy as np
 import requests
 import sphn
+from openai import APIError, APIStatusError
 from fastapi import (
     FastAPI,
     File,
@@ -442,6 +443,16 @@ async def _report_websocket_exception(websocket: WebSocket, exc: Exception):
             error_message = (
                 f"Service '{exc.service}' timed out. Please try again later."
             )
+        elif isinstance(exc, APIError):
+            message = str(exc)
+            if isinstance(exc, APIStatusError):
+                try:
+                    body = exc.body
+                    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+                        message = body["detail"]
+                except Exception:
+                    pass
+            error_message = f"LLM proxy error: {message}"
         elif isinstance(exc, WebSocketClosedError):
             logger.debug("Websocket was closed.")
         else:

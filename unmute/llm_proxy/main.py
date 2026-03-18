@@ -546,8 +546,12 @@ def _openai_to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str,
                     mapped["tool_calls"] = converted_calls
 
         if role == "tool":
-            # Ollama expects 'tool' role for results.
-            pass
+            name = message.get("name")
+            if isinstance(name, str) and name:
+                mapped["name"] = name
+            tool_call_id = message.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                mapped["tool_call_id"] = tool_call_id
 
         out.append(mapped)
     return out

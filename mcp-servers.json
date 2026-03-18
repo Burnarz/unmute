@@ -37,13 +37,7 @@
       "name": "google-workspace",
       "enabled": true,
       "command": [
-        "uv",
-        "run",
-        "--with", "mcp[cli]",
-        "--with", "google-api-python-client",
-        "--with", "google-auth-httplib2",
-        "--with", "google-auth-oauthlib",
-        "python",
+        "/opt/google-workspace-mcp/bin/python",
         "/app/unmute/mcp_google_workspace.py"
       ],
       "install": [],

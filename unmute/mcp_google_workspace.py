@@ -2,6 +2,7 @@ import json
 import datetime
 import base64
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from mcp.server.fastmcp import FastMCP
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -15,15 +16,41 @@ mcp = FastMCP("google-workspace")
 
 import os
 
-# Read the token path from environment variable, fallback to previous if not set
-token_env = os.environ.get("GOOGLE_TOKEN_FILE")
-TOKEN_PATH = Path(token_env)
+
+def _token_path() -> Path:
+    token_env = os.environ.get("GOOGLE_TOKEN_FILE")
+    if not token_env:
+        raise FileNotFoundError("GOOGLE_TOKEN_FILE is not configured")
+    return Path(token_env)
+
+
+def _calendar_timezone_name() -> str:
+    return os.environ.get("CALENDAR_LOCAL_TIMEZONE") or os.environ.get("TZ", "UTC")
+
+
+def _calendar_timezone() -> ZoneInfo:
+    timezone_name = _calendar_timezone_name()
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:
+        logger.warning("Invalid calendar timezone '%s', falling back to UTC", timezone_name)
+        return ZoneInfo("UTC")
+
+
+def _configured_calendars() -> list[dict[str, str]]:
+    calendars = [{'id': 'primary', 'name': 'Votre calendrier'}]
+    shared_cal_id = os.environ.get("SHARED_CALENDAR_ID")
+    if shared_cal_id:
+        calendars.append({'id': shared_cal_id, 'name': 'Calendrier partagé'})
+    return calendars
+
 
 def get_google_credentials():
-    if not TOKEN_PATH.exists():
-        raise FileNotFoundError(f"Google token file not found at {TOKEN_PATH}")
-    
-    with open(TOKEN_PATH, "r") as f:
+    token_path = _token_path()
+    if not token_path.exists():
+        raise FileNotFoundError(f"Google token file not found at {token_path}")
+
+    with open(token_path, "r") as f:
         data = json.load(f)
         
     return Credentials(
@@ -45,14 +72,10 @@ def get_next_calendar_events(max_results: int = 10) -> str:
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-        
+
         now = datetime.datetime.utcnow().isoformat() + 'Z'
-        calendars = [{'id': 'primary', 'name': 'Votre calendrier'}]
-        
-        shared_cal_id = os.environ.get("SHARED_CALENDAR_ID")
-        if shared_cal_id:
-            calendars.append({'id': shared_cal_id, 'name': 'Calendrier partagé'})
-        
+        calendars = _configured_calendars()
+
         all_events = []
         
         for cal in calendars:
@@ -103,30 +126,51 @@ def get_daily_agenda(date_str: str = None) -> str:
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-        
+
+        timezone = _calendar_timezone()
         if date_str:
-            base_date = datetime.datetime.fromisoformat(date_str)
+            base_date = datetime.date.fromisoformat(date_str)
         else:
-            base_date = datetime.datetime.utcnow()
-            
-        time_min = base_date.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
-        time_max = base_date.replace(hour=23, minute=59, second=59, microsecond=0).isoformat() + 'Z'
-        
-        events_result = service.events().list(
-            calendarId='primary', timeMin=time_min, timeMax=time_max,
-            singleEvents=True, orderBy='startTime'
-        ).execute()
-        
-        events = events_result.get('items', [])
-        if not events:
+            base_date = datetime.datetime.now(timezone).date()
+
+        day_start = datetime.datetime.combine(
+            base_date, datetime.time.min, tzinfo=timezone
+        )
+        day_end = datetime.datetime.combine(
+            base_date, datetime.time(23, 59, 59), tzinfo=timezone
+        )
+
+        all_events = []
+        for calendar in _configured_calendars():
+            try:
+                events_result = service.events().list(
+                    calendarId=calendar['id'],
+                    timeMin=day_start.isoformat(),
+                    timeMax=day_end.isoformat(),
+                    singleEvents=True,
+                    orderBy='startTime',
+                ).execute()
+            except Exception as cal_err:
+                logger.warning(f"Could not fetch calendar {calendar['id']}: {cal_err}")
+                continue
+
+            for event in events_result.get('items', []):
+                event['_calendar_name'] = calendar['name']
+                all_events.append(event)
+
+        if not all_events:
             return f"Aucun événement prévu pour le {base_date.strftime('%d/%m/%Y')}."
-            
+
+        all_events.sort(key=lambda x: x['start'].get('dateTime', x['start'].get('date')))
         result = f"Agenda pour le {base_date.strftime('%d/%m/%Y')} :\n"
-        for event in events:
+        for event in all_events:
             start = event['start'].get('dateTime', 'Journée entière')
             if 'T' in start:
                 start = datetime.datetime.fromisoformat(start.replace('Z', '+00:00')).strftime('%H:%M')
-            result += f"- {start}: {event.get('summary', 'Sans titre')} (ID: {event.get('id')})\n"
+            result += (
+                f"- [{event['_calendar_name']}] {start}: "
+                f"{event.get('summary', 'Sans titre')} (ID: {event.get('id')})\n"
+            )
         return result
     except Exception as e:
         return f"Erreur lors de la récupération de l'agenda : {str(e)}"
@@ -142,7 +186,7 @@ def create_calendar_event(
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-        
+
         try:
             if 'T' not in start_time:
                 start_dt = datetime.datetime.fromisoformat(start_time.replace(' ', 'T'))
@@ -151,15 +195,27 @@ def create_calendar_event(
         except Exception:
             return f"Format de date invalide : {start_time}. Utilisez le format ISO (AAAA-MM-JJTHH:MM:SSZ)."
 
+        calendar_timezone = _calendar_timezone()
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=calendar_timezone)
+        else:
+            start_dt = start_dt.astimezone(calendar_timezone)
+
         end_dt = start_dt + datetime.timedelta(minutes=duration_minutes)
-        
+
         event = {
             'summary': summary,
             'description': description,
-            'start': {'dateTime': start_dt.isoformat(), 'timeZone': 'UTC'},
-            'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'UTC'},
+            'start': {
+                'dateTime': start_dt.isoformat(),
+                'timeZone': _calendar_timezone_name(),
+            },
+            'end': {
+                'dateTime': end_dt.isoformat(),
+                'timeZone': _calendar_timezone_name(),
+            },
         }
-        
+
         event = service.events().insert(calendarId='primary', body=event).execute()
         return f"Événement créé : {summary} le {start_dt.strftime('%d/%m à %H:%M')}."
     except Exception as e:
@@ -172,11 +228,7 @@ def get_calendar_event_details(event_id: str) -> dict:
     try:
         creds = get_google_credentials()
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-        calendars = [{'id': 'primary', 'name': 'Votre calendrier'}]
-
-        shared_cal_id = os.environ.get("SHARED_CALENDAR_ID")
-        if shared_cal_id:
-            calendars.append({'id': shared_cal_id, 'name': 'Calendrier partagé'})
+        calendars = _configured_calendars()
 
         last_error = None
         for calendar in calendars:

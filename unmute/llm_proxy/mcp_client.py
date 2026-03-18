@@ -375,6 +375,7 @@ class MCPManager:
         return self._openai_tools
 
     async def start(self) -> None:
+        failures: list[str] = []
         for cfg in self._server_configs:
             try:
                 server = MCPServerProcess(cfg)
@@ -390,8 +391,15 @@ class MCPManager:
                         continue
                     self._tool_mapping[tool.openai_name] = (server, tool.tool_name)
                     self._openai_tools.append(tool.to_openai_tool())
-            except Exception:
+            except Exception as exc:
+                failures.append(f"{cfg.name}: {type(exc).__name__}: {exc}")
                 logger.exception("Failed to start MCP server '%s'", cfg.name)
+
+        if failures:
+            raise RuntimeError(
+                "Failed to start one or more enabled MCP servers: "
+                + " | ".join(failures)
+            )
 
     async def stop(self) -> None:
         for server in self._servers.values():

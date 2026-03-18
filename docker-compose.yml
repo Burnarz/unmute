@@ -83,9 +83,9 @@ services:
       - ./unmute:/app/unmute
       - ./mcp-servers.json:/app/mcp-servers.json
       - ./mcp-tools-excluded.json:/app/mcp-tools-excluded.json
-      - ${JARVIS_SHARE_PATH}:/app/partage
-      - ${GOOGLE_TOKENS_PATH}:/app/GoogleTokens
-      - ${MEMORY_FOLDER}:/app/memory
+      - ${JARVIS_SHARE_PATH:-./volumes/partage}:/app/partage
+      - ${GOOGLE_TOKENS_PATH:-./volumes/google-tokens}:/app/GoogleTokens
+      - ${MEMORY_FOLDER:-./volumes/memory}:/app/memory
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     environment:

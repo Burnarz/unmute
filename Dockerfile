@@ -8,6 +8,12 @@ RUN apt-get update \
     && npm install -g @modelcontextprotocol/server-filesystem \
     && npm install -g @brave/brave-search-mcp-server \
     && npm install -g @modelcontextprotocol/server-memory \
+    && uv venv /opt/google-workspace-mcp \
+    && uv pip install --python /opt/google-workspace-mcp/bin/python \
+        "mcp[cli]" \
+        google-api-python-client \
+        google-auth-httplib2 \
+        google-auth-oauthlib \
     && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=bind,source=uv.lock,target=uv.lock \

@@ -1,3 +1,5 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import sys
 import types
 from unittest.mock import patch
@@ -5,6 +7,8 @@ import os
 
 from unmute.llm_proxy.main import (
     _approval_cancelled_result,
+    _normalize_create_event_arguments,
+    _parse_relative_french_datetime,
     _tool_approval_key,
     _strip_internal_fields,
     _tool_approval_summary,
@@ -36,6 +40,47 @@ def test_tool_approval_key_is_stable_for_same_args_order():
     )
 
     assert key_a == key_b
+
+
+def test_parse_relative_french_datetime_for_demain():
+    parsed = _parse_relative_french_datetime(
+        "Ajoute un rdv fleuriste demain a 15h",
+        now=datetime(2026, 3, 18, 10, 0, tzinfo=ZoneInfo("Europe/Paris")),
+    )
+
+    assert parsed == "2026-03-19T15:00:00+01:00"
+
+
+def test_parse_relative_french_datetime_for_vendredi():
+    parsed = _parse_relative_french_datetime(
+        "Ajoute un rdv fleuriste vendredi a 15h",
+        now=datetime(2026, 3, 18, 10, 0, tzinfo=ZoneInfo("Europe/Paris")),
+    )
+
+    assert parsed == "2026-03-20T15:00:00+01:00"
+
+
+def test_normalize_create_event_arguments_prefers_latest_user_message():
+    args = {
+        "summary": "Fleuriste",
+        "start_time": "2026-03-18T15:00:00+01:00",
+        "description": "vendredi a 15h",
+    }
+    messages = [
+        {"role": "user", "content": "Ajoute fleuriste vendredi a 15h"},
+    ]
+
+    with patch(
+        "unmute.llm_proxy.main._now_in_calendar_timezone",
+        return_value=datetime(2026, 3, 18, 10, 0, tzinfo=ZoneInfo("Europe/Paris")),
+    ):
+        normalized = _normalize_create_event_arguments(
+            "create_calendar_event",
+            args,
+            messages,
+        )
+
+    assert normalized["start_time"] == "2026-03-20T15:00:00+01:00"
 
 
 def test_tool_approval_summary_for_create_calendar_event():

@@ -4,12 +4,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -64,6 +66,19 @@ Instrumentator().instrument(app).expose(app)
 
 _http_client: httpx.AsyncClient | None = None
 _mcp_manager: MCPManager | None = None
+DEFAULT_CALENDAR_TIMEZONE = os.environ.get(
+    "CALENDAR_LOCAL_TIMEZONE",
+    os.environ.get("TZ", "Europe/Paris"),
+)
+_FRENCH_WEEKDAYS = {
+    "lundi": 0,
+    "mardi": 1,
+    "mercredi": 2,
+    "jeudi": 3,
+    "vendredi": 4,
+    "samedi": 5,
+    "dimanche": 6,
+}
 
 
 async def _http() -> httpx.AsyncClient:
@@ -129,6 +144,109 @@ def _tool_requires_approval(tool_name: str) -> bool:
 def _tool_approval_key(tool_name: str, arguments: dict[str, Any]) -> str:
     normalized_args = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
     return f"{tool_name}:{normalized_args}"
+
+
+def _calendar_timezone() -> ZoneInfo:
+    try:
+        return ZoneInfo(DEFAULT_CALENDAR_TIMEZONE)
+    except Exception:
+        logger.warning("Invalid calendar timezone '%s', falling back to UTC", DEFAULT_CALENDAR_TIMEZONE)
+        return ZoneInfo("UTC")
+
+
+def _now_in_calendar_timezone() -> datetime:
+    return datetime.now(_calendar_timezone())
+
+
+def _normalize_french_text(text: str) -> str:
+    replacements = {
+        "à": "a",
+        "â": "a",
+        "é": "e",
+        "è": "e",
+        "ê": "e",
+        "ë": "e",
+        "î": "i",
+        "ï": "i",
+        "ô": "o",
+        "ö": "o",
+        "ù": "u",
+        "û": "u",
+        "ü": "u",
+        "ç": "c",
+        "’": "'",
+    }
+    normalized = text.lower()
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    return normalized
+
+
+def _latest_user_message_text(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return _extract_message_text(message)
+    return ""
+
+
+def _parse_relative_french_datetime(text: str, *, now: datetime | None = None) -> str | None:
+    normalized = _normalize_french_text(text)
+    reference = now or _now_in_calendar_timezone()
+
+    time_match = re.search(r"(?:\ba\s*)?(\d{1,2})(?:[:h](\d{2}))?\s*h?\b", normalized)
+    hour = 9
+    minute = 0
+    if time_match is not None:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or "0")
+
+    day_offset: int | None = None
+    if "apres-demain" in normalized or "apres demain" in normalized:
+        day_offset = 2
+    elif "demain" in normalized:
+        day_offset = 1
+    elif "aujourd'hui" in normalized or "aujourdhui" in normalized:
+        day_offset = 0
+    else:
+        for weekday_name, weekday_idx in _FRENCH_WEEKDAYS.items():
+            if weekday_name not in normalized:
+                continue
+            days_ahead = (weekday_idx - reference.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            if f"{weekday_name} prochain" in normalized or f"prochain {weekday_name}" in normalized:
+                days_ahead += 7 if days_ahead < 7 else 0
+            day_offset = days_ahead
+            break
+
+    if day_offset is None:
+        return None
+
+    target = reference + timedelta(days=day_offset)
+    target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return target.isoformat()
+
+
+def _normalize_create_event_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if _tool_leaf_name(tool_name) not in {"create_event", "create_calendar_event"}:
+        return arguments
+
+    normalized_args = dict(arguments)
+    latest_user_text = _latest_user_message_text(messages)
+    parsed_start_time = _parse_relative_french_datetime(latest_user_text)
+
+    if parsed_start_time is None:
+        description = str(arguments.get("description") or "")
+        parsed_start_time = _parse_relative_french_datetime(description)
+
+    if parsed_start_time is not None:
+        normalized_args["start_time"] = parsed_start_time
+
+    return normalized_args
 
 
 def _format_datetime_for_humans(value: Any) -> str | None:
@@ -598,6 +716,7 @@ async def _resolve_tool_calls_streaming(
                         args = json.loads(tc["function"]["arguments"])
                     except Exception:
                         args = {}
+                    args = _normalize_create_event_arguments(name, args, messages)
 
                     if _tool_requires_approval(name):
                         approval_key = _tool_approval_key(name, args)
@@ -762,6 +881,7 @@ async def chat_completions(request: Request):
                 args = json.loads(tc["function"]["arguments"])
             except Exception:
                 args = {}
+            args = _normalize_create_event_arguments(name, args, messages)
             if _tool_requires_approval(name):
                 approval_key = _tool_approval_key(name, args)
                 if approval_key in denied_approval_keys:

@@ -393,6 +393,57 @@ def _is_approval_cancelled_result(result: dict[str, Any]) -> bool:
     )
 
 
+def _is_initial_greeting_turn(messages: list[dict[str, Any]]) -> bool:
+    if len(messages) != 2:
+        return False
+    first, second = messages
+    if first.get("role") != "system" or second.get("role") != "user":
+        return False
+    content = _extract_message_text(second).strip().lower()
+    return content in {"hello!", "salut !"}
+
+
+async def _with_preloaded_memory(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_initial_greeting_turn(messages):
+        return messages
+    if _mcp_manager is None:
+        return messages
+
+    memory_tool_name = "mcp__memory__read_graph"
+    if not any(
+        tool.get("function", {}).get("name") == memory_tool_name
+        for tool in (_mcp_manager.openai_tools or [])
+        if isinstance(tool, dict)
+    ):
+        return messages
+
+    logger.info("Preloading memory graph for initial greeting turn")
+    memory_result = await _tool_result(memory_tool_name, {})
+    tool_call_id = f"tc-preload-memory-{uuid.uuid4().hex}"
+
+    return [
+        messages[0],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {"name": memory_tool_name, "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": memory_tool_name,
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(memory_result, ensure_ascii=False),
+        },
+        messages[1],
+    ]
+
+
 def _build_tools(
     excluded_tools: set[str], incoming_tools: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -575,6 +626,7 @@ async def _resolve_tool_calls_streaming(
     upstream_body = _strip_internal_fields(body)
     session_id = body.get("unmute_session_id")
     messages: list[dict[str, Any]] = [m for m in body.get("messages", []) if isinstance(m, dict)]
+    messages = await _with_preloaded_memory(messages)
     client = await _http()
     response_id = f"chatcmpl-{uuid.uuid4().hex}"
     created, model = int(time.time()), str(body.get("model", "unknown"))
@@ -859,6 +911,7 @@ async def chat_completions(request: Request):
         return StreamingResponse(_resolve_tool_calls_streaming(body, tools), media_type="text/event-stream")
     
     messages = [m for m in body.get("messages", []) if isinstance(m, dict)]
+    messages = await _with_preloaded_memory(messages)
     for _ in range(MAX_TOOL_ROUNDS):
         res = await (await _http()).post(f"{UPSTREAM_LLM_URL}/v1/chat/completions" if UPSTREAM_API_STYLE == "openai" else f"{UPSTREAM_LLM_URL}/api/chat",
                                          headers=_upstream_headers(),

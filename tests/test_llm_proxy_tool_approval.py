@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from unmute.llm_proxy.main import (
     _approval_cancelled_result,
+    _with_preloaded_memory,
     _normalize_create_event_arguments,
     _parse_relative_french_datetime,
     _tool_approval_key,
@@ -209,3 +210,33 @@ def test_approval_cancelled_result_tells_model_not_to_retry():
     assert result["status"] == "cancelled"
     assert "Do not retry the same action" in result["message"]
     assert result["retry_allowed_without_new_user_confirmation"] is False
+
+
+def test_with_preloaded_memory_injects_read_graph_before_fake_hello():
+    class FakeMCPManager:
+        openai_tools = [
+            {"function": {"name": "mcp__memory__read_graph"}}
+        ]
+
+    async def fake_tool_result(tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert tool_name == "mcp__memory__read_graph"
+        assert arguments == {}
+        return {"graph": [{"name": "default_user"}]}
+
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "Hello!"},
+    ]
+
+    with (
+        patch("unmute.llm_proxy.main._mcp_manager", new=FakeMCPManager()),
+        patch("unmute.llm_proxy.main._tool_result", new=fake_tool_result),
+    ):
+        enriched = asyncio.run(_with_preloaded_memory(messages))
+
+    assert enriched[0]["role"] == "system"
+    assert enriched[1]["role"] == "assistant"
+    assert enriched[1]["tool_calls"][0]["function"]["name"] == "mcp__memory__read_graph"
+    assert enriched[2]["role"] == "tool"
+    assert "default_user" in enriched[2]["content"]
+    assert enriched[3] == {"role": "user", "content": "Hello!"}

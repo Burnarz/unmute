@@ -8,13 +8,12 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from email.message import EmailMessage
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-google-workspace")
 
 mcp = FastMCP("google-workspace")
-
-import os
 
 
 def _token_path() -> Path:
@@ -61,6 +60,7 @@ def get_google_credentials():
         token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
         scopes=data.get("scopes", [])
     )
+
 
 @mcp.tool()
 def get_next_calendar_events(max_results: int = 10) -> str:
@@ -116,6 +116,7 @@ def get_next_calendar_events(max_results: int = 10) -> str:
     except Exception as e:
         logger.error(f"Error fetching calendars: {e}")
         return f"Erreur lors de l'interaction avec Google Calendar : {str(e)}"
+
 
 @mcp.tool()
 def get_daily_agenda(date_str: str = None) -> str:
@@ -174,6 +175,7 @@ def get_daily_agenda(date_str: str = None) -> str:
         return result
     except Exception as e:
         return f"Erreur lors de la récupération de l'agenda : {str(e)}"
+
 
 @mcp.tool()
 def create_calendar_event(
@@ -292,6 +294,7 @@ def delete_calendar_event(event_id: str) -> str:
     except Exception as e:
         return f"Erreur lors de la suppression : {str(e)}"
 
+
 @mcp.tool()
 def get_latest_emails(max_results: int = 3) -> str:
     """Read the user's latest received emails."""
@@ -312,6 +315,7 @@ def get_latest_emails(max_results: int = 3) -> str:
         return result
     except Exception as e:
         return f"Erreur Gmail : {str(e)}"
+
 
 @mcp.tool()
 def search_emails(query: str, max_results: int = 5) -> str:
@@ -334,6 +338,7 @@ def search_emails(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Erreur recherche Gmail : {str(e)}"
 
+
 @mcp.tool()
 def create_email_draft(to: str, subject: str, body: str) -> str:
     """Create a draft email in Gmail. This is safer than sending directly by voice."""
@@ -354,30 +359,34 @@ def create_email_draft(to: str, subject: str, body: str) -> str:
     except Exception as e:
         return f"Erreur création brouillon : {str(e)}"
 
+
 @mcp.tool()
 def get_contact_info(name: str) -> str:
-    """Search for a contact's info (email, phone) by name."""
+    """Search for a contact's info (email, phone, address) by name."""
     try:
         creds = get_google_credentials()
         service = build('people', 'v1', credentials=creds, cache_discovery=False)
         results = service.people().searchContacts(
-            query=name, readMask='names,emailAddresses,phoneNumbers'
+            query=name, readMask='names,emailAddresses,phoneNumbers,addresses'
         ).execute()
-        
+
         connections = results.get('results', [])
         if not connections:
             return f"Aucun contact trouvé pour '{name}'."
-            
+
         result = f"Contacts trouvés pour '{name}' :\n"
         for person in connections:
             p = person.get('person', {})
             n = p.get('names', [{}])[0].get('displayName', 'Inconnu')
             e = p.get('emailAddresses', [{}])[0].get('value', 'Pas d\'email')
             ph = p.get('phoneNumbers', [{}])[0].get('value', 'Pas de téléphone')
-            result += f"- {n}: {e}, {ph}\n"
+            addr_fields = p.get('addresses', [{}])[0]
+            addr = addr_fields.get('formattedValue') or addr_fields.get('streetAddress', 'Pas d\'adresse')
+            result += f"- {n}: {e}, {ph}, {addr}\n"
         return result
     except Exception as e:
         return f"Erreur People API : {str(e)}"
+
 
 if __name__ == "__main__":
     mcp.run()

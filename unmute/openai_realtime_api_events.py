@@ -175,6 +175,7 @@ class UnmuteResetHistory(BaseEvent[Literal["unmute.reset_history"]]):
 
 class UnmuteToolStarted(BaseEvent[Literal["unmute.tool_started"]]):
     tool: str
+    ack_text: str | None = None
 
 
 class UnmuteToolApprovalRequired(BaseEvent[Literal["unmute.tool_approval_required"]]):

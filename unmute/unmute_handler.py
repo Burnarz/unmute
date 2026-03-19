@@ -275,7 +275,12 @@ class UnmuteHandler(AsyncStreamHandler):
                             await self.output_queue.put(ora.UnmuteResetHistory(count=count))
                         elif obj == "unmute.tool_started":
                             tool_name = item.get("tool", "unknown")
-                            await self.output_queue.put(ora.UnmuteToolStarted(tool=tool_name))
+                            ack_text = item.get("ack_text")
+                            await self.output_queue.put(
+                                ora.UnmuteToolStarted(tool=tool_name, ack_text=ack_text)
+                            )
+                            if isinstance(ack_text, str) and ack_text.strip():
+                                await self._speak_tool_acknowledgement(ack_text, tool_name)
                         elif obj == "unmute.tool_finished":
                             await self.output_queue.put(ora.UnmuteToolFinished())
                     continue
@@ -334,6 +339,29 @@ class UnmuteHandler(AsyncStreamHandler):
             mt.VLLM_ACTIVE_SESSIONS.dec()
             mt.VLLM_REPLY_LENGTH.observe(len(response_words))
             mt.VLLM_GEN_DURATION.observe(llm_stopwatch.time())
+
+    async def _speak_tool_acknowledgement(self, ack_text: str, tool_name: str) -> None:
+        try:
+            ack_tts = await find_instance(
+                "tts",
+                partial(
+                    TextToSpeech,
+                    get_time=self.audio_received_sec,
+                    voice=self.tts_voice,
+                ),
+            )
+            await ack_tts.send(ack_text)
+            await ack_tts.send(TTSClientEosMessage())
+
+            async for message in ack_tts:
+                if isinstance(message, TTSAudioMessage):
+                    audio = np.array(message.pcm, dtype=np.float32)
+                    await self.output_queue.put((SAMPLE_RATE, audio))
+        except Exception:
+            logger.exception(
+                "Failed to speak tool acknowledgement through dedicated TTS for %s",
+                tool_name,
+            )
 
     def audio_received_sec(self) -> float:
         """How much audio has been received in seconds. Used instead of time.time().

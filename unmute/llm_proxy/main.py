@@ -724,15 +724,6 @@ async def _resolve_tool_calls_streaming(
                                     final_ack = ack or DEFAULT_ACK_PHRASE
                                     logger.info("Eagerly acknowledging tool: %s (as %s)", full_name, final_ack)
                                     
-                                    if not role_emitted:
-                                        yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
-                                                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
-                                        role_emitted = True
-                                    
-                                    # Inject the phrase
-                                    yield _sse_line({"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model,
-                                                     "choices": [{"index": 0, "delta": {"content": final_ack + " "}, "finish_reason": None}]})
-                                    
                                     # NEW: Send a specific event for the UI to display the tool name
                                     if not _tool_requires_approval(full_name):
                                         yield _sse_line(
@@ -740,11 +731,9 @@ async def _resolve_tool_calls_streaming(
                                                 "id": response_id,
                                                 "object": "unmute.tool_started",
                                                 "tool": full_name,
+                                                "ack_text": final_ack or None,
                                             }
                                         )
-                                    
-                                    global_content_acc.append(final_ack + " ")
-                                    round_content_acc.append(final_ack + " ")
                                     acknowledged_tools.add(tc_ack_key)
 
                         args = fn.get("arguments", "")

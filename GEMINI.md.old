@@ -1,0 +1,71 @@
+# Gemini CLI - Unmute Project Context
+
+This file provides context and instructions for Gemini CLI when working on the Unmute project.
+
+## Project Overview
+Unmute is a real-time system that allows text-based Large Language Models (LLMs) to listen and speak. It uses Kyutai's Speech-to-Text (STT) and Text-to-Speech (TTS) models to bridge the gap between voice and text.
+
+### Key Technologies
+- **Backend:** Python 3.12 (FastAPI), `fastrtc`, `websockets`, `pydantic`.
+- **Frontend:** Next.js (React), Tailwind CSS, `pnpm`.
+- **Models:** Kyutai STT/TTS, VLLM (for local LLM hosting), MCP (Model Context Protocol).
+- **Orchestration:** Docker Compose, Traefik (reverse proxy), Prometheus/Grafana (monitoring).
+
+## Architecture
+```mermaid
+graph LR
+    UB[User browser]
+    UB --> B(Backend)
+    UB --> F(Frontend)
+    B --> STT(Speech-to-text)
+    B --> LLM_Proxy(LLM Proxy)
+    LLM_Proxy --> LLM(VLLM/OpenAI/Ollama)
+    B --> TTS(Text-to-speech)
+```
+- **Backend (`unmute/main_websocket.py`):** Handles real-time WebSocket connections using a protocol based on the OpenAI Realtime API (ORA).
+- **UnmuteHandler (`unmute/unmute_handler.py`):** The core logic that coordinates STT, LLM Proxy, and TTS. Manages conversation state, VAD interruptions, and turn transitions.
+- **LLM Proxy (`unmute/llm_proxy/`):** An intermediate service that adds tool calling (via MCP) and "thinking mode" to standard LLM providers. It implements true streaming for the final response even after multiple tool-calling rounds, ensuring minimal Time To First Token (TTFT).
+- **Frontend (`frontend/`):** A Next.js application providing the user interface and audio processing in the browser.
+
+## UI & UX Mandates (Design Guidelines)
+- **Header:** The `UnmuteHeader` must be fixed at the **top-left** of the interface.
+- **Audio Visualizers:** The two circular visualizers must be **centered and stacked** (superimposed).
+  - The **User circle (White)** must always be **on top** (higher z-index) of the **Assistant circle (Green)**.
+  - The User circle must have a radius exactly **20px larger** than the Assistant circle.
+- **Media Sidebar:** 
+  - All detected links and images from the LLM responses must be grouped in a `MediaSidebar` at the **top-right**.
+  - The sidebar must be **collapsible** (click on title) but must **auto-expand** whenever a new item is added.
+  - Height must be limited (`max-h-[60vh]`) to avoid UI overlap.
+
+## Core Architectural Rules
+- **TTS Normalization & Filtering:** 
+  - All URLs (regex matched) must be **filtered out** from the text stream sent to the TTS engine.
+  - Use `normalize_text_for_tts` in `unmute/unmute_handler.py` to convert symbols (€, $, %), units (m/s, km/h), and ordinals (1er, 16e) into spoken text.
+- **Tool Management & Security:**
+  - All tools must be filtered against names in `/app/mcp-tools-excluded.json`.
+  - Tool name matching must be **robust**: handle names with/without underscores and ignore case.
+  - **Parallel Execution**: Tools within the same round must be executed in parallel using `asyncio.gather` in the proxy.
+- **Instant Acknowledgement**: The LLM Proxy must inject an "eager acknowledgement" phrase (e.g., "Un instant, je vérifie...") immediately when a tool call is detected in the stream, to avoid user-perceived silence.
+- **History Management**: 
+  - The `reset_recent_interactions` tool must truncate **X+1** interactions to include the reset request itself.
+  - History reset events (`unmute.reset_history`) must be synced between the proxy and the backend.
+- **Thinking Mode:** Supported for both OpenAI and Ollama (via the `think` parameter). Default value read from `THINKING_MODE_DEFAULT`.
+- **Google Workspace Tool**: `get_next_calendar_events` must aggregate events from the primary calendar and the shared calendar defined by `SHARED_CALENDAR_ID`.
+
+## Development Guidelines
+
+### Prerequisites
+- **Python:** 3.12 (managed with `uv`).
+- **Node.js:** `pnpm` for frontend.
+- **Hardware:** NVIDIA GPU with 16GB+ VRAM and NVIDIA Container Toolkit.
+
+### Building and Running
+- **Full Stack (Docker):** `docker compose up --build`
+- **Backend (Dev Mode):** `uv run fastapi dev unmute/main_websocket.py`
+- **Frontend (Dev Mode):** `cd frontend && pnpm dev`
+- **LLM Proxy (Dev Mode):** `uv run uvicorn unmute.llm_proxy.main:app --reload --port 8081`
+
+### Tool Usage in this Repository
+- **`uv`:** Always use `uv run` or `uv pip` for Python-related tasks.
+- **`pnpm`:** Always use `pnpm` for frontend tasks.
+- **`git`:** Do not commit `voices.yaml`, `.env`, or `mcp-servers.json` if they contain secrets.

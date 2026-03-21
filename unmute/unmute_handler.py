@@ -142,6 +142,7 @@ class UnmuteHandler(AsyncStreamHandler):
         self.openai_client = get_openai_client()
 
         self.turn_transition_lock = asyncio.Lock()
+        self.tool_ack_task: asyncio.Task[None] | None = None
 
         self.debug_dict: dict[str, Any] = {
             "timing": {},
@@ -157,6 +158,7 @@ class UnmuteHandler(AsyncStreamHandler):
             self.audio_input_override = None
 
     async def cleanup(self):
+        await self._cancel_tool_acknowledgement()
         if self.recorder is not None:
             await self.recorder.shutdown()
 
@@ -280,7 +282,7 @@ class UnmuteHandler(AsyncStreamHandler):
                                 ora.UnmuteToolStarted(tool=tool_name, ack_text=ack_text)
                             )
                             if isinstance(ack_text, str) and ack_text.strip():
-                                await self._speak_tool_acknowledgement(ack_text, tool_name)
+                                self._start_tool_acknowledgement(ack_text, tool_name)
                         elif obj == "unmute.tool_finished":
                             await self.output_queue.put(ora.UnmuteToolFinished())
                     continue
@@ -339,6 +341,37 @@ class UnmuteHandler(AsyncStreamHandler):
             mt.VLLM_ACTIVE_SESSIONS.dec()
             mt.VLLM_REPLY_LENGTH.observe(len(response_words))
             mt.VLLM_GEN_DURATION.observe(llm_stopwatch.time())
+
+    def _start_tool_acknowledgement(self, ack_text: str, tool_name: str) -> None:
+        if self.tool_ack_task is not None and not self.tool_ack_task.done():
+            self.tool_ack_task.cancel()
+
+        self.tool_ack_task = asyncio.create_task(
+            self._run_tool_acknowledgement(ack_text, tool_name)
+        )
+
+    async def _run_tool_acknowledgement(self, ack_text: str, tool_name: str) -> None:
+        try:
+            await self._speak_tool_acknowledgement(ack_text, tool_name)
+        except asyncio.CancelledError:
+            logger.debug("Cancelled tool acknowledgement for %s", tool_name)
+            raise
+        finally:
+            current_task = asyncio.current_task()
+            if self.tool_ack_task is current_task:
+                self.tool_ack_task = None
+
+    async def _cancel_tool_acknowledgement(self) -> None:
+        task = self.tool_ack_task
+        if task is None:
+            return
+
+        self.tool_ack_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def _speak_tool_acknowledgement(self, ack_text: str, tool_name: str) -> None:
         try:
@@ -629,6 +662,7 @@ class UnmuteHandler(AsyncStreamHandler):
                     t = self.tts_output_stopwatch.stop()
                     if t is not None:
                         self.debug_dict["timing"]["tts_audio"] = t
+                        await self._cancel_tool_acknowledgement()
 
                     audio = np.array(message.pcm, dtype=np.float32)
                     assert self.output_sample_rate == SAMPLE_RATE
@@ -686,6 +720,7 @@ class UnmuteHandler(AsyncStreamHandler):
             # Clear any audio queued up by FastRTC's emit().
             # Not sure under what circumstatnces this is None.
             self._clear_queue()
+        await self._cancel_tool_acknowledgement()
         self.output_queue = asyncio.Queue()  # Clear our own queue too
 
         # Push some silence to flush the Opus state.

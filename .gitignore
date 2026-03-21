@@ -26,6 +26,7 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 REVIEW.md
+REVIEW2.md
 .claude/settings.local.json
 voices.yaml
 services/moshi-server/configs/tts.toml
